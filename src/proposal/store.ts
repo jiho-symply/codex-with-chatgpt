@@ -19,6 +19,7 @@ export type PatchProposalErrorCode =
   | "UNSAFE_PATCH_PATH"
   | "TOO_MANY_FILES"
   | "PROPOSAL_LIMIT"
+  | "DUPLICATE_PENDING_PROPOSAL"
   | "PROPOSAL_NOT_FOUND";
 
 export class PatchProposalError extends Error {
@@ -469,6 +470,20 @@ export function savePatchProposal(workspace: Workspace, input: SavePatchProposal
   };
 
   const index = readIndex(workspace.id);
+  if (
+    index.items.some(
+      (item) =>
+        item.status === "pending" &&
+        item.taskId === taskId &&
+        item.iteration === input.iteration
+    )
+  ) {
+    throw new PatchProposalError(
+      "DUPLICATE_PENDING_PROPOSAL",
+      `A pending proposal already exists for task ${taskId}, iteration ${input.iteration}.`
+    );
+  }
+
   // Never evict an in-flight proposal. Reclaim terminal entries first; if the
   // model has filled the entire bounded store with pending proposals, reject
   // further submissions until Codex disposes of at least one.
