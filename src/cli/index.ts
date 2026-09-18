@@ -1182,7 +1182,7 @@ proposalCmd
       for (const item of items) {
         say(
           `${item.id}  ${item.status}  task=${item.taskId} iter=${item.iteration}  ` +
-            `${item.fileCount} files / ${item.sizeBytes} bytes`
+            `${item.fileCount} files / ${item.sizeBytes} bytes / risk=${item.risk}`
         );
       }
     } catch (error) {
