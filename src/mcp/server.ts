@@ -194,6 +194,8 @@ const submitPatchOutputSchema = {
   sha256: z.string(),
   fileCount: z.number().int().positive(),
   paths: z.array(z.string()),
+  risk: z.enum(["normal", "execution-sensitive"]),
+  riskReasons: z.array(z.string()),
 };
 
 export interface McpContext {
@@ -528,6 +530,8 @@ export function createMcpServer(ctx: McpContext): McpServer {
           sha256: meta.sha256,
           fileCount: meta.fileCount,
           paths: meta.paths,
+          risk: meta.risk,
+          riskReasons: meta.riskReasons,
         });
       } catch (error) {
         return mapError(error);
