@@ -19,29 +19,49 @@ ChatGPT 웹 앱을 Codex 코딩 세션의 계획·리뷰 계층으로 사용합�
 업로드하지 않습니다. ChatGPT는 OAuth로 보호된 읽기 전용 MCP 연결을 통해 필요한
 파일, 검색 결과, Git diff, 테스트 기록만 요청해서 읽습니다.
 
-## ChatGPT 모델 선택
+## ChatGPT 모델 및 reasoning effort 선택
 
-이 포크에서는 새 ChatGPT 대화를 만들 때 사용할 모델을 지정할 수 있습니다.
+일반 사용자는 모델 이름을 직접 입력할 필요가 없습니다. Codex에게 다음과 같이
+요청하면 됩니다.
+
+```text
+Codex with ChatGPT 모델 설정해줘.
+```
+
+설정/재설정 흐름은 다음과 같습니다.
+
+```text
+현재 ChatGPT 계정에서 사용 가능한 모델 목록 표시
+        ↓
+모델 선택
+        ↓
+그 모델에서 실제 사용 가능한 reasoning/effort 목록 표시
+        ↓
+effort 선택
+        ↓
+설정 저장
+```
+
+목록은 요금제 이름을 보고 하드코딩하지 않고, 로그인된 **ChatGPT 웹 UI의 실제
+선택지**를 읽어서 만듭니다. 따라서 계정/워크스페이스별로 노출되는 선택지가
+다르면 그 차이가 그대로 반영됩니다.
+
+ChatGPT가 모델과 effort를 별도 UI로 제공하면 순서대로 선택하고, 하나의 평면
+picker로 제공하면 실제 picker에서 확인 가능한 선택지만 보여줍니다. 존재하지
+않는 모델/effort 조합을 임의로 만들지 않습니다.
+
+저장한 모델 또는 effort가 나중에 사라지면 다른 설정으로 조용히 fallback하지
+않고, 새 C2C Chat을 시작하기 전에 재설정을 요청합니다.
+
+내부 자동화/디버깅용 명령은 남아 있습니다.
 
 ```bash
-c2c prefs set --model "GPT-5.6 Sol"
 c2c prefs --json
+c2c prefs set --model "GPT-5.6 Sol" --effort "High"
+c2c prefs set --model default --effort default
 ```
 
-모델 이름은 **ChatGPT 웹 모델 선택기에 보이는 이름과 정확히 일치**해야 합니다.
-새 C2C 대화를 만들 때 Codex가 boot prompt를 보내기 전에 해당 모델을 선택합니다.
-
-계정에서 그 모델을 사용할 수 없으면 다른 모델로 조용히 대체하지 않고 중단하여
-사용자에게 알려줍니다.
-
-기본 동작으로 되돌리려면:
-
-```bash
-c2c prefs set --model default
-```
-
-모델 설정은 **새 대화에만 적용**됩니다. 이미 진행 중인 C2C 대화의 모델은 사용자가
-명시적으로 요청하지 않는 한 바꾸지 않습니다.
+설정은 **새 C2C 대화부터 적용**됩니다.
 
 ## 한 번에 설치
 
@@ -67,8 +87,8 @@ Codex with ChatGPT를 완전히 설치하고 설정해줘. 가능한 작업은 �
 
 1. `skill/`을 `~/.codex/skills/codex-with-chatgpt/`에 설치합니다.
 2. Codex에게 **"Codex with ChatGPT 최초 설정해줘."**라고 요청합니다.
-3. 원하는 경우 모델을 설정합니다.
-   `c2c prefs set --model "<ChatGPT 웹에 표시되는 모델 이름>"`
+3. 원하는 경우 **"Codex with ChatGPT 모델 설정해줘."**라고 요청해 표시되는
+   모델 목록과 effort 목록에서 선택합니다.
 4. 이후 **"Codex with ChatGPT를 사용해서 XXX를 구현해줘."**라고 사용합니다.
 
 새 workspace는 기본적으로 workspace당 하나의 ChatGPT Project를 사용합니다.
@@ -125,8 +145,8 @@ pnpm test
 
 c2c setup
 c2c prefs --json
-c2c prefs set --model "GPT-5.6 Sol"
-c2c prefs set --model default
+c2c prefs set --model "GPT-5.6 Sol" --effort "High"
+c2c prefs set --model default --effort default
 c2c sandbox-allow
 c2c status
 c2c doctor
