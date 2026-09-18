@@ -25,6 +25,19 @@ function modifyPatch(target = "src/app.ts"): string {
   ].join("\n");
 }
 
+function deletePatch(target = "src/app.ts"): string {
+  return [
+    `diff --git a/${target} b/${target}`,
+    "deleted file mode 100644",
+    "index 1111111..0000000",
+    `--- a/${target}`,
+    "+++ /dev/null",
+    "@@ -1 +0,0 @@",
+    "-export const value = 1;",
+    "",
+  ].join("\n");
+}
+
 describe("patch proposal store", () => {
   const dirs: string[] = [];
 
@@ -58,6 +71,7 @@ describe("patch proposal store", () => {
 
     expect(meta.status).toBe("pending");
     expect(meta.paths).toEqual(["src/app.ts"]);
+    expect(meta.operations).toEqual([{ path: "src/app.ts", operation: "modify" }]);
     expect(meta.fileCount).toBe(1);
     expect(meta.risk).toBe("normal");
     expect(meta.riskReasons).toEqual([]);
@@ -105,8 +119,20 @@ describe("patch proposal store", () => {
       iteration: 1,
       patch: modifyPatch("package.json"),
     });
-    expect(meta.risk).toBe("execution-sensitive");
+    expect(meta.risk).toBe("approval-required");
     expect(meta.riskReasons).toContain("dependency/build manifest");
+  });
+
+  it("classifies file deletion as approval-required", () => {
+    const { workspace } = setup();
+    const meta = savePatchProposal(workspace, {
+      taskId: "c2c_delete",
+      iteration: 1,
+      patch: deletePatch(),
+    });
+    expect(meta.operations).toEqual([{ path: "src/app.ts", operation: "delete" }]);
+    expect(meta.risk).toBe("approval-required");
+    expect(meta.riskReasons).toContain("file deletion");
   });
 
   it("rejects sensitive and C2C control paths", () => {
