@@ -10,7 +10,8 @@ export const MAX_PATCH_PROPOSALS = 20;
 const MAX_TARGET_BYTES = 16 * 1024 * 1024;
 
 export type PatchProposalStatus = "pending" | "applied" | "rejected" | "failed";
-export type PatchProposalRisk = "normal" | "execution-sensitive";
+export type PatchProposalRisk = "normal" | "approval-required";
+export type PatchFileOperation = "create" | "modify" | "delete";
 
 export type PatchProposalErrorCode =
   | "PATCH_TOO_LARGE"
@@ -49,6 +50,7 @@ export interface PatchProposalMeta {
   sha256: string;
   fileCount: number;
   paths: string[];
+  operations: { path: string; operation: PatchFileOperation }[];
   risk: PatchProposalRisk;
   riskReasons: string[];
   baseFiles: TargetFingerprint[];
@@ -164,7 +166,7 @@ function validateFileHeader(value: string, prefix: "a/" | "b/", target: string):
   return normalizePatchPath(value.slice(2)) === target;
 }
 
-function validateSection(section: string[], target: string): void {
+function validateSection(section: string[], target: string): PatchFileOperation {
   if (section.some((line) => line === "GIT binary patch" || line.startsWith("Binary files "))) {
     throw new PatchProposalError("INVALID_PATCH", "Binary patches are not accepted.");
   }
@@ -203,9 +205,15 @@ function validateSection(section: string[], target: string): void {
   if (!section.some((line) => line.startsWith("@@ "))) {
     throw new PatchProposalError("INVALID_PATCH", `Patch for ${target} has no unified-diff hunk.`);
   }
+  if (oldPath === "/dev/null") return "create";
+  if (newPath === "/dev/null") return "delete";
+  return "modify";
 }
 
-function classifyPatchRisk(paths: string[]): { risk: PatchProposalRisk; reasons: string[] } {
+function classifyPatchRisk(
+  paths: string[],
+  operations: { path: string; operation: PatchFileOperation }[]
+): { risk: PatchProposalRisk; reasons: string[] } {
   const reasons = new Set<string>();
   const manifestNames = new Set([
     "package.json",
@@ -231,6 +239,10 @@ function classifyPatchRisk(paths: string[]): { risk: PatchProposalRisk; reasons:
     "Gemfile.lock",
     "Makefile",
   ]);
+
+  if (operations.some((item) => item.operation === "delete")) {
+    reasons.add("file deletion");
+  }
 
   for (const target of paths) {
     const base = path.posix.basename(target);
@@ -273,7 +285,7 @@ function classifyPatchRisk(paths: string[]): { risk: PatchProposalRisk; reasons:
   }
 
   return {
-    risk: reasons.size > 0 ? "execution-sensitive" : "normal",
+    risk: reasons.size > 0 ? "approval-required" : "normal",
     reasons: [...reasons],
   };
 }
@@ -337,7 +349,13 @@ function targetFingerprint(workspace: Workspace, requested: string): TargetFinge
 export function validatePatchProposal(
   workspace: Workspace,
   patch: string
-): { paths: string[]; baseFiles: TargetFingerprint[]; sizeBytes: number; sha256: string } {
+): {
+  paths: string[];
+  operations: { path: string; operation: PatchFileOperation }[];
+  baseFiles: TargetFingerprint[];
+  sizeBytes: number;
+  sha256: string;
+} {
   const sizeBytes = utf8Bytes(patch);
   if (sizeBytes <= 0) {
     throw new PatchProposalError("INVALID_PATCH", "Patch body is empty.");
@@ -371,6 +389,7 @@ export function validatePatchProposal(
   }
 
   const paths: string[] = [];
+  const operations: { path: string; operation: PatchFileOperation }[] = [];
   const seen = new Set<string>();
   for (let n = 0; n < starts.length; n++) {
     const start = starts[n];
@@ -381,12 +400,13 @@ export function validatePatchProposal(
       throw new PatchProposalError("INVALID_PATCH", `Duplicate diff section for ${target}.`);
     }
     seen.add(target);
-    validateSection(section, target);
+    const operation = validateSection(section, target);
     paths.push(target);
+    operations.push({ path: target, operation });
   }
 
   const baseFiles = paths.map((target) => targetFingerprint(workspace, target));
-  return { paths, baseFiles, sizeBytes, sha256: sha256(patch) };
+  return { paths, operations, baseFiles, sizeBytes, sha256: sha256(patch) };
 }
 
 export function savePatchProposal(workspace: Workspace, input: SavePatchProposalInput): PatchProposalMeta {
@@ -404,7 +424,7 @@ export function savePatchProposal(workspace: Workspace, input: SavePatchProposal
   if (summary && utf8Bytes(summary) > 4096) {
     throw new PatchProposalError("INVALID_PATCH", "summary exceeds 4096 UTF-8 bytes.");
   }
-  const risk = classifyPatchRisk(validated.paths);
+  const risk = classifyPatchRisk(validated.paths, validated.operations);
   const meta: PatchProposalMeta = {
     id,
     taskId,
@@ -417,6 +437,7 @@ export function savePatchProposal(workspace: Workspace, input: SavePatchProposal
     sha256: validated.sha256,
     fileCount: validated.paths.length,
     paths: validated.paths,
+    operations: validated.operations,
     risk: risk.risk,
     riskReasons: risk.reasons,
     baseFiles: validated.baseFiles,
