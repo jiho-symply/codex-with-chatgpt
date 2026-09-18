@@ -111,7 +111,17 @@ describe("patch proposal store", () => {
 
   it("rejects sensitive and C2C control paths", () => {
     const { workspace } = setup();
-    for (const target of [".env", ".c2cignore", ".c2c.json", "private/note.ts", ".git/config"]) {
+    for (const target of [
+      ".env",
+      ".c2cignore",
+      ".c2c.json",
+      ".gitattributes",
+      ".gitmodules",
+      "private/note.ts",
+      ".git/config",
+      "dist/generated.js",
+      "node_modules/pkg/index.js",
+    ]) {
       expect(() =>
         savePatchProposal(workspace, {
           taskId: "c2c_test",
@@ -155,6 +165,36 @@ describe("patch proposal store", () => {
     expect(() =>
       savePatchProposal(workspace, { taskId: "c2c_test", iteration: 1, patch: control })
     ).toThrow(/control/i);
+  });
+
+  it("never evicts pending proposals when the bounded store is full", () => {
+    const { workspace } = setup();
+    const proposals = Array.from({ length: 20 }, (_, i) =>
+      savePatchProposal(workspace, {
+        taskId: `c2c_limit_${i}`,
+        iteration: 1,
+        patch: modifyPatch(),
+      })
+    );
+    expect(listPatchProposals(workspace.id, 20)).toHaveLength(20);
+
+    expect(() =>
+      savePatchProposal(workspace, {
+        taskId: "c2c_overflow",
+        iteration: 1,
+        patch: modifyPatch(),
+      })
+    ).toThrow(/pending patch proposals/i);
+
+    markPatchProposal(workspace.id, proposals[0].id, "rejected");
+    const next = savePatchProposal(workspace, {
+      taskId: "c2c_after_reclaim",
+      iteration: 1,
+      patch: modifyPatch(),
+    });
+    expect(next.status).toBe("pending");
+    expect(listPatchProposals(workspace.id, 20)).toHaveLength(20);
+    expect(listPatchProposals(workspace.id, 20).some((item) => item.id === proposals[0].id)).toBe(false);
   });
 
   it("rejects patches above the bounded proposal size", () => {
