@@ -1001,7 +1001,7 @@ session
 
 const prefsCmd = program
   .command("prefs")
-  .description("Remember ChatGPT developer mode and setup choice for this machine");
+  .description("Remember ChatGPT developer mode, setup choice, and preferred model for this machine");
 
 acceptUnusedWorkspaceOption(
   prefsCmd
@@ -1015,40 +1015,50 @@ acceptUnusedWorkspaceOption(
       say(JSON.stringify({ ok: true, ...prefs }));
       return;
     }
-    say(prefs.developerModeEnabled ? "开发人员模式：已记住已开启" : "开发人员模式：尚未记住");
-    if (prefs.setupMode === "auto") say("配置方式：AI 自动化配置（预览版）");
-    else if (prefs.setupMode === "manual") say("配置方式：手动教学配置");
-    else say("配置方式：尚未选择");
+    say(prefs.developerModeEnabled ? "개발자 모드: 활성화 상태 저장됨" : "개발자 모드: 저장되지 않음");
+    if (prefs.setupMode === "auto") say("설정 방식: AI 자동 설정(프리뷰)");
+    else if (prefs.setupMode === "manual") say("설정 방식: 수동 안내 설정");
+    else say("설정 방식: 아직 선택하지 않음");
+    say(prefs.chatgptModel ? `ChatGPT 모델: ${prefs.chatgptModel}` : "ChatGPT 모델: 기본값 사용");
   });
 
 acceptUnusedWorkspaceOption(
   prefsCmd
     .command("set")
-    .description("Save a ChatGPT setup choice for this machine")
+    .description("Save ChatGPT setup/model preferences for this machine")
     .option("--developer-mode", "remember that ChatGPT developer mode is on", false)
     .option("--setup-mode <mode>", "auto (preview) or manual")
+    .option("--model <label>", "preferred ChatGPT model label; use 'default' to clear")
     .option("--json", "machine-readable output", false)
 )
-  .action((opts: { developerMode: boolean; setupMode?: string; json: boolean }) => {
+  .action((opts: { developerMode: boolean; setupMode?: string; model?: string; json: boolean }) => {
     try {
       const modeRaw = opts.setupMode?.trim().toLowerCase();
       if (modeRaw && !SETUP_MODES.includes(modeRaw as SetupMode)) {
         throw new Error(`setup-mode must be one of ${SETUP_MODES.join(", ")}`);
       }
-      if (!opts.developerMode && !modeRaw) {
-        throw new Error("nothing to save: pass --developer-mode and/or --setup-mode");
+      const modelRaw = opts.model?.trim();
+      if (!opts.developerMode && !modeRaw && modelRaw === undefined) {
+        throw new Error("nothing to save: pass --developer-mode, --setup-mode, and/or --model");
       }
+      const chatgptModel =
+        modelRaw === undefined ? undefined : modelRaw.toLowerCase() === "default" ? null : modelRaw;
       const prefs = mergeUiPrefs({
         developerModeEnabled: opts.developerMode ? true : undefined,
         setupMode: modeRaw as SetupMode | undefined,
+        chatgptModel,
       });
       if (opts.json) {
         say(JSON.stringify({ ok: true, ...prefs }));
         return;
       }
-      if (opts.developerMode) check("已记住开发人员模式已开启");
-      if (modeRaw === "auto") check("已记住配置方式：AI 自动化配置（预览版）");
-      if (modeRaw === "manual") check("已记住配置方式：手动教学配置");
+      if (opts.developerMode) check("개발자 모드 활성화 상태를 저장했습니다");
+      if (modeRaw === "auto") check("설정 방식 저장: AI 자동 설정(프리뷰)");
+      if (modeRaw === "manual") check("설정 방식 저장: 수동 안내 설정");
+      if (modelRaw !== undefined) {
+        if (chatgptModel) check(`ChatGPT 모델 저장: ${chatgptModel}`);
+        else check("ChatGPT 모델 설정을 지웠습니다. 기본 모델을 사용합니다");
+      }
     } catch (error) {
       handleCliError(error, opts.json);
     }
