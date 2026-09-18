@@ -23,11 +23,18 @@ describe("ui prefs", () => {
     const prefs = readUiPrefs();
     expect(prefs.developerModeEnabled).toBe(false);
     expect(prefs.setupMode).toBeNull();
-    expect(prefs.remembered).toEqual({ developerMode: false, setupMode: false });
+    expect(prefs.chatgptModel).toBeNull();
+    expect(prefs.chatgptEffort).toBeNull();
+    expect(prefs.remembered).toEqual({
+      developerMode: false,
+      setupMode: false,
+      chatgptModel: false,
+      chatgptEffort: false,
+    });
     expect(prefs.setupChoicePrompt).toBe(SETUP_CHOICE_PROMPT);
-    expect(prefs.setupChoicePrompt).toContain("AI 自动化配置（预览版）");
-    expect(prefs.setupChoicePrompt).toContain("手动教学配置");
-    expect(prefs.setupChoicePrompt).toContain("请回复「1」或「2」");
+    expect(prefs.setupChoicePrompt).toContain("AI 자동 설정(프리뷰)");
+    expect(prefs.setupChoicePrompt).toContain("수동 안내 설정");
+    expect(prefs.setupChoicePrompt).toContain("「1」 또는 「2」");
   });
 
   it("remembers developer mode as on only, never as off", () => {
@@ -48,6 +55,29 @@ describe("ui prefs", () => {
     const auto = mergeUiPrefs({ setupMode: "auto" });
     expect(auto.setupMode).toBe("auto");
     expect(auto.developerModeEnabled).toBe(true);
+  });
+
+  it("persists and clears ChatGPT model and effort preferences", () => {
+    dirs.push(isolateStateDir());
+    const saved = mergeUiPrefs({ chatgptModel: "GPT-5.6 Sol", chatgptEffort: "High" });
+    expect(saved.chatgptModel).toBe("GPT-5.6 Sol");
+    expect(saved.chatgptEffort).toBe("High");
+    expect(saved.remembered.chatgptModel).toBe(true);
+    expect(saved.remembered.chatgptEffort).toBe(true);
+
+    const preserved = mergeUiPrefs({ setupMode: "manual" });
+    expect(preserved.chatgptModel).toBe("GPT-5.6 Sol");
+    expect(preserved.chatgptEffort).toBe("High");
+
+    const changedModel = mergeUiPrefs({ chatgptModel: "GPT-6 Pro" });
+    expect(changedModel.chatgptModel).toBe("GPT-6 Pro");
+    expect(changedModel.chatgptEffort).toBeNull();
+
+    const cleared = mergeUiPrefs({ chatgptModel: null, chatgptEffort: null });
+    expect(cleared.chatgptModel).toBeNull();
+    expect(cleared.chatgptEffort).toBeNull();
+    expect(cleared.remembered.chatgptModel).toBe(false);
+    expect(cleared.remembered.chatgptEffort).toBe(false);
   });
 
   it("rejects an unknown setup mode", () => {

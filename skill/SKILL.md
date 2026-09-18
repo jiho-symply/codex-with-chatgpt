@@ -3,9 +3,10 @@ name: codex-with-chatgpt
 description: >
   Use ChatGPT (web) as the planning and review brain for Codex coding sessions,
   while Codex keeps full execution ownership. Use when the user says
-  "使用 Codex with ChatGPT ..." / "Set up Codex with ChatGPT" / "用 ChatGPT 规划",
+  "Codex with ChatGPT 사용" / "Set up Codex with ChatGPT" / "ChatGPT로 계획해줘",
   when they ask to connect ChatGPT to the current workspace, disconnect it,
-  or run a task through the ChatGPT planning loop.
+  configure/reconfigure the ChatGPT model or reasoning effort, or run a task
+  through the ChatGPT planning loop.
 ---
 
 # Codex with ChatGPT
@@ -13,16 +14,24 @@ description: >
 ChatGPT thinks. Codex works.
 
 You (Codex) own execution: editing, shell, git, tests, recovery.
-ChatGPT owns high-level reasoning: understanding, planning, review, debug strategy.
-The C2C Bridge gives ChatGPT read-only MCP access to the current workspace, so
-control messages between you and ChatGPT stay tiny (< 1 KB) — ChatGPT pulls
-whatever data it needs by itself.
+ChatGPT owns high-level reasoning: understanding, planning, review, debug strategy,
+and—only when requested—isolated code-patch proposals.
+The C2C Bridge keeps the repository read-only to ChatGPT. Patch proposals are
+stored outside the repository and only Codex may validate/apply them.
+Control messages stay bounded (< 4 KiB) and never carry file/diff/log/patch bodies.
 
 **Golden rules**
 
-1. NEVER paste file contents, diffs, or logs into ChatGPT. ChatGPT reads them through MCP.
+1. NEVER paste file contents, diffs, logs, or patch bodies into ChatGPT. ChatGPT reads
+   workspace data through MCP and submits code only through `submit_patch`.
+   Every C2C control message and every C2C control reply must be <= 4096 UTF-8
+   bytes. Before sending, measure with `new TextEncoder().encode(message).length`
+   (or an equivalent byte-length check) and compact if needed. Before acting on
+   a reply, perform the same check. If it exceeds 4096 bytes, do not execute or
+   apply anything from that reply; ask ChatGPT for a compact C2C restatement.
+   Never truncate structured identifiers such as TASK_ID / PROPOSAL_ID.
 2. NEVER show the user technical internals (MCP, OAuth, PKCE, tunnel, ports, localhost).
-   Speak in terms of "连接 ChatGPT / 安全连接 / 配对". The only exception is the
+   Speak in terms of "ChatGPT 연결 / 보안 연결 / 페어링". The only exception is the
    **guided manual ChatGPT setup** below: expose only the exact settings
    field labels/values the user must enter, without explaining internals.
 3. The pairing code is the ONLY credential you may ever type into a browser.
@@ -54,10 +63,10 @@ whatever data it needs by itself.
    - The ONLY exception: the user explicitly says the Cloudflare login must use
      their own browser session — that single Cloudflare login step may go through
      their browser; everything else stays in the built-in browser.
-   - If the user asks to run ChatGPT in their own browser, refuse politely and
-     explain: "Codex 需要持续调用 ChatGPT 和配置连接，这会频繁操作页面，可能影响
-     你浏览器的正常使用。ChatGPT 只能跑在内置浏览器里。" Only if the user replies
-     with an explicit "我愿意承担影响" may you proceed in their browser; otherwise
+   - If the user asks to run ChatGPT in their own browser, explain:
+     "Codex가 ChatGPT를 지속적으로 호출하고 연결 설정을 조작하므로 일반 브라우저 사용에
+     영향을 줄 수 있습니다. 기본적으로 내장 브라우저를 사용합니다." Only if the user replies
+     with an explicit acknowledgement that they accept the interference may you proceed in their browser; otherwise
      keep ChatGPT in the built-in browser, every time they ask.
 6. Conversation reuse depends on `c2c session --json` → `conversation.mode`
    (see Conversation management). Do not invent a second mode.
@@ -72,13 +81,31 @@ whatever data it needs by itself.
    Each workspace also has exactly ONE ChatGPT connector. Do not create a
    second connector for the same workspace. Other workspaces may have their
    own connectors — never edit those.
-7. After first-time setup, never ask the user to approve writing C2C's local
+7. **Preferred ChatGPT model + effort.** Read `c2c prefs --json` before opening
+   a NEW ChatGPT conversation.
+   - `chatgptModel` stores the chosen model-family label and
+     `chatgptEffort` stores the chosen reasoning/effort label.
+   - Apply them only to NEW conversations. Never switch model/effort mid-task in
+     an existing conversation unless the user explicitly asks.
+   - Use the ChatGPT web picker through the same IAB tab. Prefer DOM/text/ARIA
+     selectors; never use screenshot-coordinate clicking.
+   - If ChatGPT exposes model and effort as separate controls, select model
+     first and effort second. If the UI exposes a flattened picker, select the
+     visible option whose accessible metadata corresponds to the saved pair.
+   - Verify the selected state before sending the boot prompt. If either saved
+     choice is no longer available, STOP and offer the **Model configuration**
+     workflow. Never silently fall back.
+   - If `chatgptModel` is null, keep ChatGPT's default selection.
+   Direct `c2c prefs set --model/--effort` commands are storage primitives;
+   normal users should use **Model configuration** so they never need to know
+   model names in advance.
+8. After first-time setup, never ask the user to approve writing C2C's local
    settings directory. Run `c2c sandbox-allow --json` (idempotent). If it fails
    with EPERM / Operation not permitted, request elevated permissions and retry
    ONCE. After `{ "alreadyAllowed": true }` or `{ "added": true }`, stay silent.
-8. ChatGPT pages: only the URLs in **In-app browser (ChatGPT)**. Never start
+9. ChatGPT pages: only the URLs in **In-app browser (ChatGPT)**. Never start
    from chatgpt.com and click through menus.
-9. **Doctor gate.** After `c2c doctor --json`, do not `goto` ChatGPT and do not
+10. **Doctor gate.** After `c2c doctor --json`, do not `goto` ChatGPT and do not
    send `[C2C]` until local is green — except the reconnect settings pages when
    `chatgptRepair.needed` is true. Not green:
    - `report.bridge.ok` is not true
@@ -137,19 +164,23 @@ that close the tab, hide the window, or stall on the settings page.
    via the 加插件 URL (same name, new Server URL). Do not put that public
    address into Project instructions — write the connector **name** only.
 
-5. **Do not wait for 8 tools** on the settings page. "Connected" / authorize
-   success / pairing accepted is enough. Confirm tools in the conversation with
+5. **Do not wait for a specific tool count** on the settings page. "Connected" /
+   authorize success / pairing accepted is enough. Confirm tools in the conversation with
    `workspace_info`.
 
 6. **Batch.** Fill a known form in one Playwright / `js` script when you can.
    After an action, one cheap DOM check. Do not screenshot-poll.
 
-7. **One conversation, Chat mode.** The first ChatGPT chat is the C2C
-   conversation. Chat and Work (聊天 / 工作) are separate: a Work conversation
+7. **One conversation, Chat mode + model/effort selection.** The first ChatGPT
+   chat is the C2C conversation. Chat and Work are separate: a Work conversation
    cannot become Chat. On every NEW conversation, if a Chat/Work switcher is
-   visible (often top-left), confirm **Chat** is selected before the boot
-   prompt. If it is Work, do not continue there — Switch to a new Chat
-   conversation (HANDOFF). If no switcher is visible, do not hunt menus; continue.
+   visible (often top-left), confirm **Chat** is selected before the boot prompt.
+   Then read `c2c prefs --json`. If `chatgptModel` is non-null, apply the saved
+   model and, when non-null, `chatgptEffort`. Use the same detection/selection
+   logic as **Model configuration** and verify the resulting UI state. If either
+   choice is unavailable, stop before the boot prompt and offer to reconfigure.
+   If it is Work, do not continue there — switch to a new Chat conversation
+   (HANDOFF). If no switcher is visible, do not hunt menus; continue.
    Send the boot prompt and the workspace_info check in that Chat conversation.
    Confirm the reply names the current workspace **before** saving or replacing
    the session URL. If validation fails, keep the old saved URL. Do not open a
@@ -170,7 +201,7 @@ that close the tab, hide the window, or stall on the settings page.
    the tab foreground, and stay in this same task. Do not `waitFor` 5 minutes
    and do not screenshot-poll. Every 20–30 seconds, one cheap DOM check:
    - still generating → wait again (do not type, do not resend);
-   - `STATE: PLAN` / `DONE` / `BLOCKED` / the verify workspace name → read it
+   - `STATE: PLAN` / `PATCH` / `DONE` / `BLOCKED` / the verify workspace name → read it
      and continue the existing protocol;
    - visible error → repair; do not start a new chat.
    A browser/js timeout is not failure. Claim the same tab, read the page, keep
@@ -248,6 +279,78 @@ Speak only of 临时地址 / 固定域名 / 登录 Cloudflare.
 4. Never put connection credentials in the project. The CLI stores them in
    the C2C state directory.
 
+## Workflow: model configuration ("모델 설정" / "모델 재설정" / "ChatGPT 모델 바꿔줘")
+
+This is the user-facing way to choose a model. Never ask the user to type a
+model name from memory and never send them to MCP/connector settings.
+
+1. Run `c2c prefs --json` and remember the current `chatgptModel` and
+   `chatgptEffort`.
+2. Reuse the one IAB ChatGPT tab, foreground + `markHandoff`. Open an **unsent
+   new Chat** surface only for inspecting selectors; do not send a message and
+   do not save it as the C2C session. This inspection page is an explicit
+   exception to the normal conversation-reuse rule.
+3. Open the ChatGPT model picker and inspect the live DOM/ARIA structure.
+   The signed-in web UI is the source of truth for availability:
+   - collect enabled, actually visible selectable entries;
+   - do not use a hard-coded plan/model list as the authority;
+   - ignore disabled/upgrade-only entries unless they are clearly selectable;
+   - use accessible labels/descriptions/submenus to distinguish **model family**
+     from **reasoning/effort**.
+   If the UI is flattened (for example effort-first entries), group entries by
+   the underlying model label only when the DOM/accessibility text makes that
+   mapping explicit. If it does not, do not invent a model-family mapping:
+   present the raw available choices instead and explain that this account's
+   picker is flattened.
+4. Show the user a numbered **available model list** in Codex, including the
+   current saved model when applicable. Also include "ChatGPT 기본값 사용".
+   Example shape only (never hard-code these as the real options):
+
+   ```
+   사용 가능한 ChatGPT 모델
+   1. GPT-5.6 Sol
+   2. GPT-5.6 Sol Pro
+   3. GPT-6 Pro
+   0. ChatGPT 기본값 사용
+
+   현재 설정: GPT-5.6 Sol / High
+   번호를 선택하세요.
+   ```
+
+   Wait for the user's choice. Accept the number or exact displayed name.
+5. If the user selects the default, run
+   `c2c prefs set --model default --effort default --json`, confirm that future
+   new chats will use ChatGPT's default, and finish.
+6. For a selected model, use the picker DOM to enumerate the **effort/reasoning
+   choices that are actually available for that model on this account**.
+   Temporarily selecting the model on the unsent page is allowed when necessary
+   to reveal its effort controls.
+   - Never assume Instant/Medium/High/Extra High/Pro availability from the plan.
+   - Do not show an effort that is disabled or absent.
+   - If there is no separate effort control for that model, say so and store the
+     model with effort cleared.
+7. Show the numbered effort list, for example:
+
+   ```
+   GPT-5.6 Sol에서 사용 가능한 effort
+   1. Instant
+   2. Medium
+   3. High
+   4. Extra High
+
+   번호를 선택하세요.
+   ```
+
+   Wait for the user's choice.
+8. Save the **exact discovered labels**, not the numeric indices:
+   `c2c prefs set --model "<model label>" --effort "<effort label>" --json`.
+   If there is no separate effort, use
+   `c2c prefs set --model "<model label>" --effort default --json`.
+9. Read `c2c prefs --json` once to verify persistence, then tell the user the
+   final model/effort in one line and note that it applies to **new C2C chats**.
+   Leave the IAB tab in standby. Do not create a ChatGPT history item merely for
+   configuration.
+
 ## Workflow: first-time setup（"使用 Codex with ChatGPT 完成首次配置"）
 
 1. Detect prerequisites yourself: `node --version` (>= 20), and check `cloudflared`.
@@ -266,6 +369,11 @@ Speak only of 临时地址 / 固定域名 / 登录 Cloudflare.
    Authorize / pairing form is on screen: run `c2c pair --json` then type
    that code immediately. Doctor does not pre-mint a code.
 4. `c2c prefs --json` (this machine, not this workspace).
+   - `chatgptModel` and `chatgptEffort` are optional preferences for newly
+     created chats. If set, step 6 applies both before the boot prompt.
+   - Do not ask for a raw model name during setup. If the user wants to choose
+     or change them, run **Model configuration**, which discovers the live
+     account-specific choices from ChatGPT's web UI.
    - If `setupMode` is null: tell the user exactly `setupChoicePrompt`. Wait
      for「1」or「2」. Then `c2c prefs set --setup-mode auto` or `--setup-mode manual`.
      Do not open ChatGPT settings and do not start automatic configuration
@@ -302,8 +410,9 @@ Speak only of 临时地址 / 固定域名 / 登录 Cloudflare.
      tools on this page.
 6. Same tab: open the first C2C chat per **Conversation management**
    (Project collection for a new workspace; `https://chatgpt.com/` only
-   in long-chat). Confirm Chat mode per **In-app browser** §7 (if it is Work,
-   open a new Chat conversation instead). Send the boot prompt from
+   in long-chat). Confirm Chat mode and apply the preferred model/effort per
+   **In-app browser** §7. If either configured choice is unavailable, do not
+   send the boot prompt; offer **Model configuration**. Send the boot prompt from
    `docs/protocol.md` §Boot Prompt, then (same chat) send:
    `Use the "<connectorName>" connector: call workspace_info and read hello-style top-level file. Reply with the workspace name.`
    Confirm the reply matches `workspaceName` (wait per **In-app browser** §8).
@@ -477,7 +586,8 @@ Project. Do **not** click the ChatGPT sidebar to create the Project
 ### Project instructions (paste into 项目设置 → 指令)
 
 ```
-You are the planning and review layer for one local workspace. Codex executes.
+You are the planning, coding-proposal, and review layer for one local workspace.
+Codex exclusively executes and mutates the repository.
 
 This Project is bound only to:
 - Workspace name: {{workspace_name}}
@@ -489,8 +599,10 @@ Codex with ChatGPT connector. If workspace_info names a different
 workspace, stop. Do not plan. Do not use this Project's memory.
 
 Read code, git, diffs, and any released command output through that
-connector. Never ask anyone to paste file bodies, diffs, or logs. After
-EXECUTED, call execution_output (list, then read) when a readable item
+connector. Never ask anyone to paste file bodies, diffs, logs, or patch bodies.
+When the current C2C task explicitly uses code/auto mode, you may call
+`submit_patch`. It stores a bounded proposal outside the repository and never
+applies it; Codex remains the only repository writer. After EXECUTED, call execution_output (list, then read) when a readable item
 exists; if status is restricted, review from git instead. Never upload
 the repo into this Project's files or sources.
 
@@ -507,104 +619,227 @@ Be substantive: why, which file, what to test. No empty one-liners and
 no 40-step epics. Use C2C control messages.
 ```
 
-## Workflow: coding task（"使用 Codex with ChatGPT 完成 XXX"）
+## Workflow: coding task ("Codex with ChatGPT로 XXX" / coding subagent)
 
-Protocol states sent to ChatGPT: INIT → PLAN → EXECUTING → EXECUTED → REVIEW → (PLAN | DONE | BLOCKED).
-Local checkpoint states (session only, never a ChatGPT `STATE:` line):
-`INIT`, `PLAN_RECEIVED`, `EXECUTING`, `EXECUTED_LOCAL`, `EXECUTED_SENT`, `DONE`, `BLOCKED`.
-Do not invent `STATE: RESUME`. If the original chat is gone, send HANDOFF.
-All control messages start with `[C2C]`. Keep Codex→ChatGPT messages under 1 KB.
-ChatGPT's replies are expected to be substantive (see step 3). Docs: `docs/protocol.md`.
+C2C has two implementation paths:
 
-0. `c2c tunnel status -w <workspace> --json`. If `needsChoice`, follow
-   **Connection choice** first (existing installs: ask once, then remember).
-   Then `c2c doctor -w <workspace> --json` (auto-repairs). **Doctor gate:** if local
-   is not green, do not open ChatGPT and do not send INIT. If
-   `namedRepair.needed` is true, tell the user `namedRepair.userMessage`, run
-   `c2c tunnel login --json` (their browser; Cloudflare exception), then doctor
-   again. If `chatgptRepair.needed` is true, tell the user `chatgptRepair.userMessage`
-   (one paragraph, no internals), run **Workflow: reconnect after address
-   reclaim**, then doctor again and only continue when the gate is green.
-   Generate task id: `c2c_` + 4 random hex chars — unless a checkpoint already
-   has one (reuse that id; do not mint a second task).
-1. `c2c session -w <workspace> --json`. Open ChatGPT on the same iab tab
-   per **Conversation management** for `conversation.mode` (foreground +
-   markHandoff). long-chat: saved chat, or `https://chatgpt.com/` if none.
-   project: this thread's chat URL, or the collection page for a new chat,
-   or **Bind Project** if `projectReady` is false. On a NEW conversation
-   confirm Chat mode (**In-app browser** §7), then send the boot prompt from
-   `docs/protocol.md` §Boot Prompt and the workspace_info check (name the
-   exact `connectorName`). Confirm the reply names the current workspace
-   before saving the session URL. Do not use the browser to re-read code MCP
-   already provides. After sending a control message, wait per
-   **In-app browser** §8.
+- **plan path**: ChatGPT plans/reviews; Codex writes code (classic behavior).
+- **patch path**: ChatGPT writes a bounded patch proposal; Codex alone validates,
+  applies, tests, and owns git.
 
-   **Resume from `session.checkpoint` before any INIT.** Missing checkpoint
-   (legacy session): continue as a normal new/continued loop. A browser/js
-   timeout is not a lost task — claim the original tab; do not INIT, re-run,
-   or resend EXECUTED just because a wait timed out.
-   - `EXECUTED_SENT` + `waitingFor=GPT_REVIEW`: do not INIT, do not re-run,
-     do not resend EXECUTED. Stay on the saved chat and wait for review. If
-     that chat 404s: HANDOFF from checkpoint fields (no logs), then wait.
-   - `EXECUTED_LOCAL`: local work is done; only send EXECUTED (record first
-     if this iteration has no record yet). Do not re-run.
-   - `EXECUTING`: not finished. Continue the current PLAN if you still have
-     it; otherwise HANDOFF and ask ChatGPT to restate the last PLAN. Do not
-     treat it as done and do not INIT a new task.
-   - `PLAN_RECEIVED`: execute that plan. Do not INIT.
-   - `INIT` / `waitingFor=GPT_PLAN`: claim the tab and wait. Do not resend INIT.
-   - `DONE`: summarize to the user if needed; `c2c session set --clear-checkpoint`.
-   - `BLOCKED`: surface ChatGPT's reason; do not INIT.
-   Never re-pair, never recreate the connector, and never rewrite Project
-   instructions just to resume.
-2. Send INIT with the user's goal (skip when the checkpoint says not to):
+Repository mutation, shell, tests, package installation, and git remain Codex-only.
+
+Protocol messages: `INIT → (PLAN | PATCH) → EXECUTING → EXECUTED → REVIEW → ...`.
+PATCH may be rejected locally: `PATCH → PATCH_REJECTED → PATCH | PLAN | BLOCKED`.
+Local checkpoint states:
+`INIT`, `PLAN_RECEIVED`, `PATCH_RECEIVED`, `EXECUTING`,
+`EXECUTED_LOCAL`, `EXECUTED_SENT`, `DONE`, `BLOCKED`.
+Never invent `STATE: RESUME`. All control messages start with `[C2C]`, stay
+below **4 KiB UTF-8**, and contain no file/diff/log/patch bodies.
+
+### Choose task mode
+
+Choose once from the user's wording; do not ask if the intent is clear.
+
+- `plan`: explicit planning/architecture request, or ordinary C2C usage that
+  does not ask ChatGPT to write code. This preserves upstream behavior.
+- `code`: user asks ChatGPT/C2C to act as a coding subagent, write code, create
+  a patch, or implement the code itself.
+- `review`: review-only request.
+- `auto`: only when the user explicitly asks C2C to choose between planning
+  and patching autonomously.
+
+### 0. Health + one-time proposal authorization
+
+1. Run `c2c tunnel status -w <workspace> --json`; resolve the one-time
+   connection choice when needed.
+2. Run `c2c doctor -w <workspace> --json`. Respect the normal Doctor gate.
+3. For `code` or `auto`, inspect
+   `capabilities.proposalWriteAuthorized`.
+   - true → continue.
+   - false with an existing working connector → coding-subagent mode needs one
+     one-time authorization upgrade. Tell the user, in plain language, that
+     ChatGPT will gain permission only to **submit isolated patch proposals**;
+     repository write/shell/git remain Codex-only.
+   - Recreate this workspace's exact `connectorName` at the current working
+     `mcpUrl` using the normal connector-create flow and a fresh pairing code.
+     Do not touch another workspace's connector.
+   - Run doctor again and require
+     `capabilities.proposalWriteAuthorized=true`. If it remains false, do not
+     weaken the scope check; fall back to `plan` mode and explain that patch
+     submission was not authorized.
+4. Generate task id `c2c_` + 12 random hex chars unless an active checkpoint
+   already has one.
+5. For `code` or `auto`, grant a **temporary local authorization only for
+   this task id**:
+   `c2c proposal authorize -w <ws> --task <id> --ttl-minutes 240 --json`.
+   This does not change OAuth scopes or repository permissions; it is a second,
+   local gate that expires automatically. If resuming an existing code/auto
+   checkpoint, renew that exact task id instead of creating another one.
+   Never authorize proposal submission for plan/review mode.
+
+### 1. Open/resume the C2C conversation
+
+Run `c2c session -w <workspace> --json` and open ChatGPT per Conversation
+management. On a new chat apply the configured model/effort, boot prompt, and
+workspace_info check before saving the URL.
+
+**Resume from checkpoint before sending INIT:**
+
+- First read `checkpoint.taskMode`. If it is `code` or `auto`, renew the
+  exact checkpoint task id with `c2c proposal authorize ...` before continuing.
+  If it is `plan` or `review`, ensure no new proposal authorization is created.
+- `EXECUTED_SENT` + `GPT_REVIEW`: wait for the existing review.
+- `EXECUTED_LOCAL`: send only EXECUTED; do not rerun work.
+- `PATCH_RECEIVED`: use its `proposalId` and continue **Secure proposal
+  handling** below. Never ask ChatGPT to submit a duplicate patch.
+- `EXECUTING` with a proposal id:
+  - inspect that proposal.
+  - if status is `applied`, continue tests/recording.
+  - if status is `pending` and targets are unchanged, resume normal proposal
+    validation/application.
+  - if status is `pending` but targets are stale, run
+    `git apply --reverse --check "<patchPath>"`. If it succeeds, the patch is
+    already present; mark it applied and continue. If it does not, stop rather
+    than guessing, mark failed, and surface the ambiguity.
+- `EXECUTING` without a proposal id: continue the current PLAN if available;
+  otherwise HANDOFF and ask ChatGPT to restate the PLAN.
+- `PLAN_RECEIVED`: execute that PLAN.
+- `INIT` + `GPT_PLAN`/`GPT_ACTION`: claim the same chat and wait; never
+  resend INIT because of a browser timeout.
+- `DONE`: summarize/clear checkpoint.
+- `BLOCKED`: surface the reason.
+
+Never re-pair/recreate a connector merely to resume an ordinary task.
+
+### 2. Send INIT
+
+Send a bounded INIT with the chosen mode:
 
 ```
 [C2C]
 STATE: INIT
 TASK_ID: c2c_f81a
 ITERATION: 0
+MODE: code
 
 GOAL:
-<user's goal, one paragraph>
+<user's goal, one concise paragraph>
 
 INSTRUCTION:
-Inspect the connected workspace through the Codex with ChatGPT MCP connector.
-Produce a C2C PLAN message.
+Inspect the connected workspace through MCP.
+For code mode, if a bounded code change is appropriate, implement it with
+submit_patch and reply STATE: PATCH with only proposal metadata.
+Never paste a patch into chat. If patching is unsafe/inappropriate, reply PLAN
+or BLOCKED instead.
 ```
 
-   Confirm the INIT message is visibly in that ChatGPT conversation (one cheap
-   DOM check). If the page is Retry-only, recover per **In-app browser** §7
-   first. Do not write the waiting checkpoint, and do not wait for PLAN, until
-   that message is visible.
-   Then:
-   `c2c session set -w <ws> --task <id> --iteration 0 --state INIT --protocol-state INIT --waiting-for GPT_PLAN --goal "<short goal>" --next-step "wait for PLAN"`
-3. Wait for ChatGPT's `STATE: PLAN` reply (**In-app browser** §8 — short DOM
-   checks, same tab; do not treat a 5-minute browser timeout as failure).
-   Read GOAL/ACTIONS/TESTS/SUCCESS_CRITERIA.
-   A good PLAN also carries RATIONALE and concrete natural-language edit
-   suggestions (which file, what to change, why). If the reply is a bare
-   one-liner with no rationale or file-level guidance, ask once:
-   "Please expand the plan with rationale and concrete per-file suggestions."
-   Then:
-   `c2c session set -w <ws> --protocol-state PLAN_RECEIVED --waiting-for none --next-step "execute PLAN"`
-4. Execute the plan yourself with your own harness (your tools, your judgment;
-   ChatGPT does not micro-manage tool calls).
-   Before you start:
-   `c2c session set -w <ws> --protocol-state EXECUTING --waiting-for none --next-step "finish PLAN then record"`
-5. Record the execution so ChatGPT can read it via MCP. Metadata always:
-   `c2c record -w <ws> --task c2c_f81a --iteration 1 --changed-files "src/a.ts,src/b.ts" --tests "27 passed" --exit-status ok`
-   If this iteration ran a **test / build / lint / typecheck** command, also
-   pass that command's output. Write stdout/stderr to a local temp file first,
-   then:
-   `c2c record … --command "pnpm test" --output-file <temp> --exit-code <n>`
-   Record both success and failure. Do not record shell history, `.env`,
-   keys, or unrelated dumps. Never paste that file (or any log) into ChatGPT.
-   If the CLI says the output was not released, still send EXECUTED; ChatGPT
-   reviews from git. Then:
-   `c2c session set -w <ws> --iteration 1 --state EXECUTED --protocol-state EXECUTED_LOCAL --waiting-for none --next-step "send EXECUTED"`
-6. Send EXECUTED (no diffs, no logs). Tell ChatGPT to use MCP, including
-   `execution_output` when a readable item exists:
+After the message is visibly sent, persist the chosen mode in the checkpoint:
+
+- `plan` → `c2c session set ... --protocol-state INIT --waiting-for GPT_PLAN --task-mode plan`.
+- `code` → `... --waiting-for GPT_ACTION --task-mode code`.
+- `auto` → `... --waiting-for GPT_ACTION --task-mode auto`.
+- `review` → `... --waiting-for GPT_ACTION --task-mode review`.
+
+Never infer a different task mode after resume; use the saved `checkpoint.taskMode`.
+
+### 3A. PLAN path
+
+For `STATE: PLAN`, read rationale/actions/tests/success criteria. Require
+concrete per-file natural-language guidance when implementation is requested.
+Checkpoint `PLAN_RECEIVED`, then `EXECUTING`, and execute with Codex's own
+tools. ChatGPT never micro-manages Codex tool calls.
+
+### 3B. PATCH path — Secure proposal handling
+
+A PATCH control message may contain only metadata such as:
+
+```
+[C2C]
+STATE: PATCH
+TASK_ID: c2c_f81a
+ITERATION: 1
+PROPOSAL_ID: p_0123456789abcdef
+FILES: 3
+RISK: normal
+SUMMARY:
+...
+```
+
+**Never accept a diff pasted into the chat as a substitute for `submit_patch`.**
+
+On PATCH:
+
+1. Require the same `TASK_ID`; checkpoint immediately:
+   `c2c session set -w <ws> --iteration <n> --state PATCH --protocol-state PATCH_RECEIVED --waiting-for none --task-mode <code|auto> --proposal-id "<id>" --next-step "validate patch proposal"`.
+   Reject PATCH outright if the saved task mode is not `code` or `auto`.
+2. Run `c2c proposal inspect -w <ws> <id> --json`.
+3. Require all of:
+   - proposal id matches;
+   - `meta.taskId` equals current task id;
+   - `meta.iteration` equals the PATCH iteration;
+   - `meta.status == "pending"`;
+   - integrity inspection succeeded;
+   - `stale == false`.
+   Never apply a proposal that fails any check.
+4. Review `meta.paths`, `meta.operations`, `meta.risk`, and
+   `meta.riskReasons`.
+   - `normal`: continue.
+   - `approval-required`: show affected paths, create/modify/delete operations,
+     and risk reasons and obtain **explicit user approval** before applying.
+     File deletion always requires approval. If declined, mark rejected and
+     send PATCH_REJECTED.
+5. Read the proposal patch locally using Codex's own local file capability at
+   `patchPath`. Inspect the actual changes against the user's goal. This local
+   review must not be pasted back into ChatGPT. Reject unrelated, suspicious,
+   credential-bearing, destructive, or scope-expanding changes.
+6. Run `git apply --check "<patchPath>"` from the workspace. Never pass
+   `--unsafe-paths`. If it fails, mark failed and send PATCH_REJECTED; do not
+   hand-edit around a failed proposal.
+7. Checkpoint `EXECUTING` with the proposal id, then run
+   `git apply "<patchPath>"`. This is a Codex shell action, not an MCP action.
+8. Immediately run
+   `c2c proposal mark -w <ws> <id> --status applied --json`.
+   If application failed, mark `failed`.
+9. Run `git diff --check` and inspect the resulting workspace diff before
+   executing tests/builds. Do not blindly execute a newly introduced command
+   just because the patch proposed it.
+
+**Rejection message** (under 4 KiB, no patch body):
+
+```
+[C2C]
+STATE: PATCH_REJECTED
+TASK_ID: c2c_f81a
+ITERATION: 1
+PROPOSAL_ID: p_0123456789abcdef
+
+REASON:
+<short local validation/staleness/user-decision reason>
+
+INSTRUCTION:
+Re-read current files through MCP and submit a fresh proposal, or reply PLAN/BLOCKED.
+```
+
+After sending PATCH_REJECTED, checkpoint `INIT --waiting-for GPT_ACTION` with
+the same task id/iteration/mode and wait. Never apply the rejected id later.
+
+### 4. Test and record
+
+After Codex-authored PLAN changes or an accepted PATCH:
+
+1. Run appropriate tests/typecheck/lint/build using Codex's normal judgment.
+   For approval-required proposals, user approval from step 3B is required
+   before any new/changed execution configuration is used.
+2. Record metadata:
+   `c2c record -w <ws> --task <id> --iteration <n> --changed-files "<files>" --tests "<summary>" --exit-status ok`.
+3. For test/build/lint/typecheck output, use the existing opt-in
+   `--command --output-file --exit-code` path; never paste logs into ChatGPT.
+4. Checkpoint `EXECUTED_LOCAL`.
+
+### 5. Send EXECUTED and review
+
+Send metadata only:
 
 ```
 [C2C]
@@ -615,28 +850,33 @@ ITERATION: 1
 RESULT:
 Execution finished.
 
+PROPOSAL_ID:
+p_0123456789abcdef
+
 CHANGED_FILES:
-4
+3
 
 TESTS:
 27 passed
 
-Please independently inspect the workspace and current git diff through MCP.
-If execution_output lists a readable item for this iteration, list then read it.
-If status is restricted, ignore it and review from git_diff.
+Please independently inspect the workspace and git diff through MCP.
+Use execution_output only when a readable item exists.
 ```
 
-   Then:
-   `c2c session set -w <ws> --protocol-state EXECUTED_SENT --waiting-for GPT_REVIEW --next-step "wait for PLAN or DONE"`
-7. ChatGPT reviews via MCP (`git_diff`, `read_file`, `test_status`,
-   `execution_output`) and replies DONE / PLAN (next iteration) / BLOCKED.
-8. Loop. Respect maxIterations (`.c2c.json`, default 12). At the limit, pause and ask
-   the user: "已完成 12 轮协作，仍有未解决问题，是否继续？"
-9. On DONE: summarize the result to the user in plain language.
-   `c2c session set -w <ws> --state DONE --clear-checkpoint`
-10. On BLOCKED: read ChatGPT's reason, fix what you can, or surface the single
-    decision the user must make.
-    `c2c session set -w <ws> --protocol-state BLOCKED --waiting-for USER --known-issues "<short reason>"`
+Omit PROPOSAL_ID for Codex-authored PLAN execution. Then checkpoint
+`EXECUTED_SENT --waiting-for GPT_REVIEW`.
+
+ChatGPT reviews via MCP and may reply:
+
+- `DONE` → for code/auto, run `c2c proposal revoke -w <ws> --task <id> --json`;
+  then summarize and clear checkpoint.
+- `PLAN` → follow 3A.
+- `PATCH` → follow 3B only when the saved task mode is code/auto.
+- `BLOCKED` → for code/auto, revoke the temporary task authorization, then
+  checkpoint BLOCKED / USER and surface the decision.
+
+Loop up to `maxIterations` (default 12). At the limit, ask the user whether to
+continue. A proposal submission does not bypass the iteration limit.
 
 ## Workflow: disconnect（"断开 ChatGPT"）
 

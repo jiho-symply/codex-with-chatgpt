@@ -9,17 +9,20 @@ export type ConversationReason = "existing-long-chat" | "project" | "new-workspa
 export type ProtocolState =
   | "INIT"
   | "PLAN_RECEIVED"
+  | "PATCH_RECEIVED"
   | "EXECUTING"
   | "EXECUTED_LOCAL"
   | "EXECUTED_SENT"
   | "DONE"
   | "BLOCKED";
 
-export type WaitingFor = "none" | "GPT_PLAN" | "GPT_REVIEW" | "USER";
+export type WaitingFor = "none" | "GPT_PLAN" | "GPT_ACTION" | "GPT_REVIEW" | "USER";
+export type TaskMode = "plan" | "code" | "auto" | "review";
 
 export const PROTOCOL_STATES: readonly ProtocolState[] = [
   "INIT",
   "PLAN_RECEIVED",
+  "PATCH_RECEIVED",
   "EXECUTING",
   "EXECUTED_LOCAL",
   "EXECUTED_SENT",
@@ -27,17 +30,19 @@ export const PROTOCOL_STATES: readonly ProtocolState[] = [
   "BLOCKED",
 ];
 
-export const WAITING_FOR: readonly WaitingFor[] = ["none", "GPT_PLAN", "GPT_REVIEW", "USER"];
+export const WAITING_FOR: readonly WaitingFor[] = ["none", "GPT_PLAN", "GPT_ACTION", "GPT_REVIEW", "USER"];
 
 export interface TaskCheckpoint {
   taskId: string;
   iteration: number;
   protocolState: ProtocolState;
   waitingFor: WaitingFor;
+  taskMode?: TaskMode;
   originalGoal?: string;
   completedSubtasks?: string;
   knownIssues?: string;
   nextExpectedStep?: string;
+  proposalId?: string;
   chatUrl?: string;
   projectUrl?: string;
   updatedAt: string;
@@ -228,6 +233,7 @@ export function mergeSession(previous: SavedSession | null, patch: SessionPatch)
       iteration,
       protocolState,
       waitingFor,
+      taskMode: patch.checkpoint.taskMode ?? previous?.checkpoint?.taskMode,
       originalGoal: capCheckpointText(
         patch.checkpoint.originalGoal ?? previous?.checkpoint?.originalGoal,
         CHECKPOINT_LIMITS.originalGoal
@@ -244,6 +250,7 @@ export function mergeSession(previous: SavedSession | null, patch: SessionPatch)
         patch.checkpoint.nextExpectedStep ?? previous?.checkpoint?.nextExpectedStep,
         CHECKPOINT_LIMITS.nextExpectedStep
       ),
+      proposalId: patch.checkpoint.proposalId ?? previous?.checkpoint?.proposalId,
       chatUrl: patch.checkpoint.chatUrl ?? previous?.checkpoint?.chatUrl ?? url,
       projectUrl: patch.checkpoint.projectUrl ?? previous?.checkpoint?.projectUrl ?? projectUrl,
       updatedAt: new Date().toISOString(),

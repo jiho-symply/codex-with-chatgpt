@@ -1,0 +1,315 @@
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { Workspace } from "../src/workspace/manager.js";
+import {
+  MAX_PATCH_BYTES,
+  PatchProposalError,
+  listPatchProposals,
+  markPatchProposal,
+  readPatchProposal,
+  savePatchProposal,
+} from "../src/proposal/store.js";
+import { cleanup, isolateStateDir, makeTmpDir, write } from "./helpers.js";
+
+function modifyPatch(target = "src/app.ts"): string {
+  return [
+    `diff --git a/${target} b/${target}`,
+    "index 1111111..2222222 100644",
+    `--- a/${target}`,
+    `+++ b/${target}`,
+    "@@ -1 +1 @@",
+    "-export const value = 1;",
+    "+export const value = 2;",
+    "",
+  ].join("\n");
+}
+
+function deletePatch(target = "src/app.ts"): string {
+  return [
+    `diff --git a/${target} b/${target}`,
+    "deleted file mode 100644",
+    "index 1111111..0000000",
+    `--- a/${target}`,
+    "+++ /dev/null",
+    "@@ -1 +0,0 @@",
+    "-export const value = 1;",
+    "",
+  ].join("\n");
+}
+
+describe("patch proposal store", () => {
+  const dirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of dirs) cleanup(dir);
+    dirs.length = 0;
+    delete process.env.C2C_STATE_DIR;
+  });
+
+  function setup(): { root: string; workspace: Workspace } {
+    dirs.push(isolateStateDir());
+    const root = makeTmpDir("proposal-ws");
+    dirs.push(root);
+    write(root, "src/app.ts", "export const value = 1;\n");
+    write(root, ".env", "SECRET=never\n");
+    write(root, ".c2cignore", "private/\n");
+    write(root, "private/note.ts", "export const secret = 1;\n");
+    return { root, workspace: new Workspace(root) };
+  }
+
+  it("stores a valid proposal outside the workspace without modifying the target file", () => {
+    const { root, workspace } = setup();
+    const before = fs.readFileSync(path.join(root, "src/app.ts"), "utf8");
+
+    const meta = savePatchProposal(workspace, {
+      taskId: "c2c_test",
+      iteration: 1,
+      patch: modifyPatch(),
+      summary: "Change value to 2",
+    });
+
+    expect(meta.status).toBe("pending");
+    expect(meta.paths).toEqual(["src/app.ts"]);
+    expect(meta.operations).toEqual([{ path: "src/app.ts", operation: "modify" }]);
+    expect(meta.fileCount).toBe(1);
+    expect(meta.risk).toBe("normal");
+    expect(meta.riskReasons).toEqual([]);
+    expect(fs.readFileSync(path.join(root, "src/app.ts"), "utf8")).toBe(before);
+    expect(listPatchProposals(workspace.id)).toHaveLength(1);
+
+    const saved = readPatchProposal(workspace, meta.id);
+    expect(saved.patch).toBe(modifyPatch());
+    expect(saved.stale).toBe(false);
+    expect(saved.stalePaths).toEqual([]);
+  });
+
+  it("marks a proposal stale when a target changes after submission", () => {
+    const { root, workspace } = setup();
+    const meta = savePatchProposal(workspace, {
+      taskId: "c2c_test",
+      iteration: 1,
+      patch: modifyPatch(),
+    });
+
+    write(root, "src/app.ts", "export const value = 99;\n");
+    const saved = readPatchProposal(workspace, meta.id);
+    expect(saved.stale).toBe(true);
+    expect(saved.stalePaths).toEqual(["src/app.ts"]);
+  });
+
+  it("records disposition without applying the patch", () => {
+    const { root, workspace } = setup();
+    const before = fs.readFileSync(path.join(root, "src/app.ts"), "utf8");
+    const meta = savePatchProposal(workspace, {
+      taskId: "c2c_test",
+      iteration: 1,
+      patch: modifyPatch(),
+    });
+
+    const marked = markPatchProposal(workspace.id, meta.id, "applied");
+    expect(marked.status).toBe("applied");
+    expect(fs.readFileSync(path.join(root, "src/app.ts"), "utf8")).toBe(before);
+  });
+
+  it("flags execution-sensitive configuration for explicit approval", () => {
+    const { workspace } = setup();
+    const meta = savePatchProposal(workspace, {
+      taskId: "c2c_risk",
+      iteration: 1,
+      patch: modifyPatch("package.json"),
+    });
+    expect(meta.risk).toBe("approval-required");
+    expect(meta.riskReasons).toContain("dependency/build manifest");
+  });
+
+  it("classifies file deletion as approval-required", () => {
+    const { workspace } = setup();
+    const meta = savePatchProposal(workspace, {
+      taskId: "c2c_delete",
+      iteration: 1,
+      patch: deletePatch(),
+    });
+    expect(meta.operations).toEqual([{ path: "src/app.ts", operation: "delete" }]);
+    expect(meta.risk).toBe("approval-required");
+    expect(meta.riskReasons).toContain("file deletion");
+  });
+
+  it("rejects sensitive and C2C control paths", () => {
+    const { workspace } = setup();
+    for (const target of [
+      ".env",
+      ".c2cignore",
+      ".c2c.json",
+      ".gitattributes",
+      ".gitmodules",
+      "private/note.ts",
+      ".git/config",
+      ".GIT/config",
+      ".C2CIGNORE",
+      "dist/generated.js",
+      "node_modules/pkg/index.js",
+    ]) {
+      expect(() =>
+        savePatchProposal(workspace, {
+          taskId: "c2c_test",
+          iteration: 1,
+          patch: modifyPatch(target),
+        })
+      ).toThrow(PatchProposalError);
+    }
+  });
+
+  it("rejects traversal, rename, binary, permission, and control-character patches", () => {
+    const { workspace } = setup();
+
+    for (const ambiguous of ["src/file name.ts", "src/file.ts:stream"]) {
+      expect(() =>
+        savePatchProposal(workspace, {
+          taskId: "c2c_test",
+          iteration: 1,
+          patch: modifyPatch(ambiguous),
+        })
+      ).toThrow(/unsafe|ambiguous/i);
+    }
+
+    const traversal = modifyPatch("../outside.ts");
+    expect(() =>
+      savePatchProposal(workspace, { taskId: "c2c_test", iteration: 1, patch: traversal })
+    ).toThrow(/path|canonical|outside/i);
+
+    const rename = modifyPatch().replace(
+      "diff --git a/src/app.ts b/src/app.ts",
+      "diff --git a/src/app.ts b/src/renamed.ts"
+    );
+    expect(() =>
+      savePatchProposal(workspace, { taskId: "c2c_test", iteration: 1, patch: rename })
+    ).toThrow(/rename|copy/i);
+
+    const binary = modifyPatch() + "GIT binary patch\n";
+    expect(() =>
+      savePatchProposal(workspace, { taskId: "c2c_test", iteration: 1, patch: binary })
+    ).toThrow(/binary/i);
+
+    const mode = modifyPatch().replace(
+      "index 1111111..2222222 100644",
+      "old mode 100644\nnew mode 100755"
+    );
+    expect(() =>
+      savePatchProposal(workspace, { taskId: "c2c_test", iteration: 1, patch: mode })
+    ).toThrow(/permission|executable|submodule|rename/i);
+
+    const executable = modifyPatch().replace(
+      "index 1111111..2222222 100644",
+      "index 1111111..2222222 100755"
+    );
+    expect(() =>
+      savePatchProposal(workspace, { taskId: "c2c_test", iteration: 1, patch: executable })
+    ).toThrow(/executable|mode/i);
+
+    const symlink = [
+      "diff --git a/src/link.ts b/src/link.ts",
+      "new file mode 120000",
+      "index 0000000..1111111",
+      "--- /dev/null",
+      "+++ b/src/link.ts",
+      "@@ -0,0 +1 @@",
+      "+../../outside",
+      "",
+    ].join("\n");
+    expect(() =>
+      savePatchProposal(workspace, { taskId: "c2c_test", iteration: 1, patch: symlink })
+    ).toThrow(/symlink|mode/i);
+
+    const control = modifyPatch() + "\u001b[31m";
+    expect(() =>
+      savePatchProposal(workspace, { taskId: "c2c_test", iteration: 1, patch: control })
+    ).toThrow(/control/i);
+  });
+
+  it("allows only one pending proposal per task iteration", () => {
+    const { workspace } = setup();
+    const first = savePatchProposal(workspace, {
+      taskId: "c2c_once",
+      iteration: 3,
+      patch: modifyPatch(),
+    });
+
+    expect(() =>
+      savePatchProposal(workspace, {
+        taskId: "c2c_once",
+        iteration: 3,
+        patch: modifyPatch(),
+      })
+    ).toThrow(/pending proposal already exists/i);
+
+    markPatchProposal(workspace.id, first.id, "rejected");
+    expect(() =>
+      savePatchProposal(workspace, {
+        taskId: "c2c_once",
+        iteration: 3,
+        patch: modifyPatch(),
+      })
+    ).not.toThrow();
+  });
+
+  it("does not allow a terminal proposal status to be rewritten", () => {
+    const { workspace } = setup();
+    const meta = savePatchProposal(workspace, {
+      taskId: "c2c_terminal",
+      iteration: 1,
+      patch: modifyPatch(),
+    });
+    markPatchProposal(workspace.id, meta.id, "rejected");
+    expect(() => markPatchProposal(workspace.id, meta.id, "applied")).toThrow(/already terminal/i);
+    expect(() => markPatchProposal(workspace.id, meta.id, "rejected")).not.toThrow();
+  });
+
+  it("never evicts pending proposals when the bounded store is full", () => {
+    const { workspace } = setup();
+    const proposals = Array.from({ length: 20 }, (_, i) =>
+      savePatchProposal(workspace, {
+        taskId: `c2c_limit_${i}`,
+        iteration: 1,
+        patch: modifyPatch(),
+      })
+    );
+    expect(listPatchProposals(workspace.id, 20)).toHaveLength(20);
+
+    expect(() =>
+      savePatchProposal(workspace, {
+        taskId: "c2c_overflow",
+        iteration: 1,
+        patch: modifyPatch(),
+      })
+    ).toThrow(/pending patch proposals/i);
+
+    markPatchProposal(workspace.id, proposals[0].id, "rejected");
+    const next = savePatchProposal(workspace, {
+      taskId: "c2c_after_reclaim",
+      iteration: 1,
+      patch: modifyPatch(),
+    });
+    expect(next.status).toBe("pending");
+    expect(listPatchProposals(workspace.id, 20)).toHaveLength(20);
+    expect(listPatchProposals(workspace.id, 20).some((item) => item.id === proposals[0].id)).toBe(false);
+  });
+
+  it("rejects patches above the bounded proposal size", () => {
+    const { workspace } = setup();
+    const hugeLine = "+" + "x".repeat(MAX_PATCH_BYTES);
+    const patch = [
+      "diff --git a/src/app.ts b/src/app.ts",
+      "--- a/src/app.ts",
+      "+++ b/src/app.ts",
+      "@@ -1 +1 @@",
+      "-export const value = 1;",
+      hugeLine,
+      "",
+    ].join("\n");
+
+    expect(() =>
+      savePatchProposal(workspace, { taskId: "c2c_test", iteration: 1, patch })
+    ).toThrow(/maximum|bytes/i);
+  });
+});

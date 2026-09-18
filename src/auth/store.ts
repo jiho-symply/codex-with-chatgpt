@@ -8,6 +8,7 @@ export const SUPPORTED_SCOPES = [
   "workspace.search",
   "git.read",
   "execution.read",
+  "proposal.write",
   "offline_access",
 ] as const;
 
@@ -258,6 +259,20 @@ export class AuthStore {
 
   tokenCount(): number {
     return this.tokens.size;
+  }
+
+  activeScopes(): string[] {
+    const scopes = new Set<string>();
+    for (const token of this.tokens.values()) {
+      if (!token.revoked && token.expiresAt > Date.now()) {
+        for (const scope of token.scopes) scopes.add(scope);
+      }
+    }
+    return [...scopes].sort();
+  }
+
+  hasActiveScope(scope: string): boolean {
+    return this.activeScopes().includes(scope);
   }
 
   static deleteStateFile(workspaceId: string): void {

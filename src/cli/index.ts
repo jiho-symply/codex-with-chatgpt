@@ -52,10 +52,23 @@ import {
   WAITING_FOR,
   type ConversationMode,
   type ProtocolState,
+  type TaskMode,
   type WaitingFor,
 } from "../session/state.js";
 import { appendExecutionRecord } from "../execution/records.js";
 import { saveExecutionOutput } from "../execution/output.js";
+import {
+  listPatchProposals,
+  markPatchProposal,
+  patchProposalBodyPath,
+  readPatchProposal,
+  type PatchProposalStatus,
+} from "../proposal/store.js";
+import {
+  authorizeProposalTask,
+  listAuthorizedProposalTasks,
+  revokeProposalTask,
+} from "../proposal/authorization.js";
 
 const program = new Command();
 
@@ -184,6 +197,7 @@ interface AdminInfo {
   publicUrl: string | null;
   tunnel: { running: boolean; url: string | null; provider: string };
   tokenCount: number;
+  proposalWriteAuthorized: boolean;
   pairingActive: boolean;
   pid: number;
   startedAt: string;
@@ -514,6 +528,7 @@ program
     const tunnelState = workspace ? readTunnelState(workspace.id) : null;
     const namedReady = tunnelState ? isNamedTunnelReady(tunnelState) : false;
     let namedRepair: { needed: boolean; userMessage?: string } = { needed: false };
+    let capabilities = { proposalWriteAuthorized: false };
     let chatgptRepair: {
       needed: boolean;
       reason?: string;
@@ -544,12 +559,14 @@ program
 
     if (runtime) {
       let info = await adminFetch<AdminInfo>(runtime, "GET", "/admin/info");
+      capabilities = { proposalWriteAuthorized: Boolean(info.proposalWriteAuthorized) };
       if (namedReady && opts.fix && info.tunnel.provider !== "cloudflare-named") {
         await stopBridge(root);
         await new Promise((resolve) => setTimeout(resolve, 400));
         try {
           runtime = (await ensureBridge(root)).runtime;
           info = await adminFetch<AdminInfo>(runtime, "GET", "/admin/info");
+          capabilities = { proposalWriteAuthorized: Boolean(info.proposalWriteAuthorized) };
           results.push("已切换到固定域名连接");
         } catch (error) {
           report.tunnel = { ok: false, detail: (error as Error).message };
@@ -579,6 +596,7 @@ program
               currentUrl = started.url;
               healthy = true;
               info = await adminFetch<AdminInfo>(runtime, "GET", "/admin/info");
+              capabilities = { proposalWriteAuthorized: Boolean(info.proposalWriteAuthorized) };
               const sameAddress =
                 previousUrl && normalizePublicUrl(previousUrl) === normalizePublicUrl(started.url);
               results.push(sameAddress ? "已重新建立安全连接" : "已重新建立安全连接（地址已更换）");
@@ -653,7 +671,7 @@ program
     }
 
     if (opts.json) {
-      say(JSON.stringify({ report, repairs: results, chatgptRepair, namedRepair }));
+      say(JSON.stringify({ report, repairs: results, chatgptRepair, namedRepair, capabilities }));
       return;
     }
     say(`${PRODUCT_NAME} Doctor`);
@@ -914,7 +932,9 @@ session
   .option("--project-url <url>", "ChatGPT Project collection URL (…/g/g-p-…/project)")
   .option("--connector-name <name>", "exact connector title for this workspace")
   .option("--protocol-state <state>", "checkpoint protocol state, e.g. EXECUTED_SENT")
-  .option("--waiting-for <who>", "none | GPT_PLAN | GPT_REVIEW | USER")
+  .option("--waiting-for <who>", "none | GPT_PLAN | GPT_ACTION | GPT_REVIEW | USER")
+  .option("--task-mode <mode>", "plan | code | auto | review")
+  .option("--proposal-id <id>", "active patch proposal id for crash-safe resume")
   .option("--goal <text>", "original task goal for resume / HANDOFF")
   .option("--completed-subtasks <text>")
   .option("--known-issues <text>")
@@ -933,6 +953,8 @@ session
       connectorName?: string;
       protocolState?: string;
       waitingFor?: string;
+      taskMode?: string;
+      proposalId?: string;
       goal?: string;
       completedSubtasks?: string;
       knownIssues?: string;
@@ -957,6 +979,10 @@ session
       if (waitingNorm && !WAITING_FOR.includes(waitingNorm as WaitingFor)) {
         throw new Error(`waiting-for must be one of ${WAITING_FOR.join(", ")}`);
       }
+      const taskModeRaw = opts.taskMode?.trim().toLowerCase();
+      if (taskModeRaw && !["plan", "code", "auto", "review"].includes(taskModeRaw)) {
+        throw new Error("task-mode must be plan, code, auto, or review");
+      }
       const saved = mergeSession(readSession(workspace.id), {
         url: opts.url,
         title: opts.title,
@@ -971,6 +997,8 @@ session
           ? {
               protocolState: protocolRaw as ProtocolState,
               waitingFor: (waitingNorm as WaitingFor | undefined) ?? undefined,
+              taskMode: taskModeRaw as TaskMode | undefined,
+              proposalId: opts.proposalId,
               originalGoal: opts.goal,
               completedSubtasks: opts.completedSubtasks,
               knownIssues: opts.knownIssues,
@@ -1001,7 +1029,7 @@ session
 
 const prefsCmd = program
   .command("prefs")
-  .description("Remember ChatGPT developer mode and setup choice for this machine");
+  .description("Remember ChatGPT developer mode, setup choice, and preferred model for this machine");
 
 acceptUnusedWorkspaceOption(
   prefsCmd
@@ -1015,40 +1043,68 @@ acceptUnusedWorkspaceOption(
       say(JSON.stringify({ ok: true, ...prefs }));
       return;
     }
-    say(prefs.developerModeEnabled ? "开发人员模式：已记住已开启" : "开发人员模式：尚未记住");
-    if (prefs.setupMode === "auto") say("配置方式：AI 自动化配置（预览版）");
-    else if (prefs.setupMode === "manual") say("配置方式：手动教学配置");
-    else say("配置方式：尚未选择");
+    say(prefs.developerModeEnabled ? "개발자 모드: 활성화 상태 저장됨" : "개발자 모드: 저장되지 않음");
+    if (prefs.setupMode === "auto") say("설정 방식: AI 자동 설정(프리뷰)");
+    else if (prefs.setupMode === "manual") say("설정 방식: 수동 안내 설정");
+    else say("설정 방식: 아직 선택하지 않음");
+    say(prefs.chatgptModel ? `ChatGPT 모델: ${prefs.chatgptModel}` : "ChatGPT 모델: 기본값 사용");
+    say(prefs.chatgptEffort ? `추론 effort: ${prefs.chatgptEffort}` : "추론 effort: 기본값 사용");
   });
 
 acceptUnusedWorkspaceOption(
   prefsCmd
     .command("set")
-    .description("Save a ChatGPT setup choice for this machine")
+    .description("Save ChatGPT setup/model preferences for this machine")
     .option("--developer-mode", "remember that ChatGPT developer mode is on", false)
     .option("--setup-mode <mode>", "auto (preview) or manual")
+    .option("--model <label>", "preferred ChatGPT model label; use 'default' to clear")
+    .option("--effort <label>", "preferred reasoning/effort label; use 'default' to clear")
     .option("--json", "machine-readable output", false)
 )
-  .action((opts: { developerMode: boolean; setupMode?: string; json: boolean }) => {
+  .action((opts: { developerMode: boolean; setupMode?: string; model?: string; effort?: string; json: boolean }) => {
     try {
       const modeRaw = opts.setupMode?.trim().toLowerCase();
       if (modeRaw && !SETUP_MODES.includes(modeRaw as SetupMode)) {
         throw new Error(`setup-mode must be one of ${SETUP_MODES.join(", ")}`);
       }
-      if (!opts.developerMode && !modeRaw) {
-        throw new Error("nothing to save: pass --developer-mode and/or --setup-mode");
+      const modelRaw = opts.model?.trim();
+      const effortRaw = opts.effort?.trim();
+      if (!opts.developerMode && !modeRaw && modelRaw === undefined && effortRaw === undefined) {
+        throw new Error("nothing to save: pass --developer-mode, --setup-mode, --model, and/or --effort");
+      }
+      const chatgptModel =
+        modelRaw === undefined ? undefined : modelRaw.toLowerCase() === "default" ? null : modelRaw;
+      let chatgptEffort =
+        effortRaw === undefined ? undefined : effortRaw.toLowerCase() === "default" ? null : effortRaw;
+      // Changing/clearing the model without an explicit effort invalidates the
+      // previously saved effort because availability is model-dependent.
+      if (modelRaw !== undefined && effortRaw === undefined) chatgptEffort = null;
+      if (chatgptModel === null && chatgptEffort && chatgptEffort !== null) {
+        throw new Error("cannot save a non-default effort while the model preference is default");
       }
       const prefs = mergeUiPrefs({
         developerModeEnabled: opts.developerMode ? true : undefined,
         setupMode: modeRaw as SetupMode | undefined,
+        chatgptModel,
+        chatgptEffort,
       });
       if (opts.json) {
         say(JSON.stringify({ ok: true, ...prefs }));
         return;
       }
-      if (opts.developerMode) check("已记住开发人员模式已开启");
-      if (modeRaw === "auto") check("已记住配置方式：AI 自动化配置（预览版）");
-      if (modeRaw === "manual") check("已记住配置方式：手动教学配置");
+      if (opts.developerMode) check("개발자 모드 활성화 상태를 저장했습니다");
+      if (modeRaw === "auto") check("설정 방식 저장: AI 자동 설정(프리뷰)");
+      if (modeRaw === "manual") check("설정 방식 저장: 수동 안내 설정");
+      if (modelRaw !== undefined) {
+        if (chatgptModel) check(`ChatGPT 모델 저장: ${chatgptModel}`);
+        else check("ChatGPT 모델 설정을 지웠습니다. 기본 모델을 사용합니다");
+      }
+      if (effortRaw !== undefined) {
+        if (chatgptEffort) check(`추론 effort 저장: ${chatgptEffort}`);
+        else check("추론 effort 설정을 지웠습니다. 기본값을 사용합니다");
+      } else if (modelRaw !== undefined) {
+        check("모델이 변경되어 기존 effort 설정을 초기화했습니다");
+      }
     } catch (error) {
       handleCliError(error, opts.json);
     }
@@ -1117,6 +1173,165 @@ program
       else check("已记录执行摘要");
     }
   );
+
+
+const proposalCmd = program
+  .command("proposal")
+  .description("Inspect patch proposals submitted by ChatGPT; this command never applies them");
+
+proposalCmd
+  .command("authorize")
+  .description("Temporarily authorize patch proposals for one explicit coding task")
+  .requiredOption("--task <id>", "current C2C task id")
+  .option("-w, --workspace <path>")
+  .option("--ttl-minutes <n>", "authorization lifetime in minutes", parseInteger, 240)
+  .option("--json", "machine-readable output", false)
+  .action((opts: { task: string; workspace?: string; ttlMinutes: number; json: boolean }) => {
+    try {
+      const workspace = new Workspace(resolveWorkspace(opts.workspace));
+      const authorization = authorizeProposalTask(workspace.id, opts.task, opts.ttlMinutes);
+      if (opts.json) {
+        say(JSON.stringify({ ok: true, authorization }));
+        return;
+      }
+      check(`Patch proposal permission granted for task ${authorization.taskId} until ${new Date(authorization.expiresAt).toISOString()}`);
+    } catch (error) {
+      handleCliError(error, opts.json);
+    }
+  });
+
+proposalCmd
+  .command("authorization")
+  .description("Show active per-task patch proposal authorizations")
+  .option("-w, --workspace <path>")
+  .option("--json", "machine-readable output", false)
+  .action((opts: { workspace?: string; json: boolean }) => {
+    try {
+      const workspace = new Workspace(resolveWorkspace(opts.workspace));
+      const tasks = listAuthorizedProposalTasks(workspace.id);
+      if (opts.json) {
+        say(JSON.stringify({ ok: true, tasks }));
+        return;
+      }
+      if (tasks.length === 0) {
+        say("활성화된 coding-subagent patch 권한이 없습니다.");
+        return;
+      }
+      for (const item of tasks) {
+        say(`${item.taskId}  expires=${new Date(item.expiresAt).toISOString()}`);
+      }
+    } catch (error) {
+      handleCliError(error, opts.json);
+    }
+  });
+
+proposalCmd
+  .command("revoke")
+  .description("Revoke temporary patch proposal authorization for one task or all tasks")
+  .option("--task <id>", "task id; omit to revoke all proposal task authorizations")
+  .option("-w, --workspace <path>")
+  .option("--json", "machine-readable output", false)
+  .action((opts: { task?: string; workspace?: string; json: boolean }) => {
+    try {
+      const workspace = new Workspace(resolveWorkspace(opts.workspace));
+      const result = revokeProposalTask(workspace.id, opts.task);
+      if (opts.json) {
+        say(JSON.stringify({ ok: true, ...result }));
+        return;
+      }
+      check(`Patch proposal permission revoked: ${result.revoked}`);
+    } catch (error) {
+      handleCliError(error, opts.json);
+    }
+  });
+
+proposalCmd
+  .command("list", { isDefault: true })
+  .description("List recent patch proposals for this workspace")
+  .option("-w, --workspace <path>")
+  .option("--limit <n>", "maximum proposals to show", parseNonNegativeInteger, 20)
+  .option("--json", "machine-readable output", false)
+  .action((opts: { workspace?: string; limit: number; json: boolean }) => {
+    try {
+      const workspace = new Workspace(resolveWorkspace(opts.workspace));
+      const items = listPatchProposals(workspace.id, Math.max(1, opts.limit));
+      if (opts.json) {
+        say(JSON.stringify({ ok: true, items }));
+        return;
+      }
+      if (items.length === 0) {
+        say("저장된 patch proposal이 없습니다.");
+        return;
+      }
+      for (const item of items) {
+        say(
+          `${item.id}  ${item.status}  task=${item.taskId} iter=${item.iteration}  ` +
+            `${item.fileCount} files / ${item.sizeBytes} bytes / risk=${item.risk}`
+        );
+      }
+    } catch (error) {
+      handleCliError(error, opts.json);
+    }
+  });
+
+proposalCmd
+  .command("inspect")
+  .description("Verify proposal integrity and detect whether target files changed since submission")
+  .argument("<id>", "proposal id")
+  .option("-w, --workspace <path>")
+  .option("--json", "machine-readable output", false)
+  .action((id: string, opts: { workspace?: string; json: boolean }) => {
+    try {
+      const workspace = new Workspace(resolveWorkspace(opts.workspace));
+      const result = readPatchProposal(workspace, id);
+      const patchPath = patchProposalBodyPath(workspace.id, id);
+      const payload = {
+        ok: true,
+        meta: result.meta,
+        stale: result.stale,
+        stalePaths: result.stalePaths,
+        patchPath,
+      };
+      if (opts.json) {
+        say(JSON.stringify(payload));
+        return;
+      }
+      say(`Proposal: ${result.meta.id}`);
+      say(`Status: ${result.meta.status}`);
+      say(`Files: ${result.meta.paths.join(", ")}`);
+      say(`Integrity: ok (${result.meta.sha256})`);
+      say(result.stale ? `Stale: yes (${result.stalePaths.join(", ")})` : "Stale: no");
+      say(`Patch file: ${patchPath}`);
+    } catch (error) {
+      handleCliError(error, opts.json);
+    }
+  });
+
+proposalCmd
+  .command("mark")
+  .description("Record the local disposition of a proposal; does not touch git or workspace files")
+  .argument("<id>", "proposal id")
+  .requiredOption("--status <status>", "applied | rejected | failed")
+  .option("-w, --workspace <path>")
+  .option("--json", "machine-readable output", false)
+  .action((id: string, opts: { workspace?: string; status: string; json: boolean }) => {
+    try {
+      const workspace = new Workspace(resolveWorkspace(opts.workspace));
+      const status = opts.status.trim().toLowerCase();
+      if (!["applied", "rejected", "failed"].includes(status)) {
+        throw new Error("status must be applied, rejected, or failed");
+      }
+      const meta = markPatchProposal(
+        workspace.id,
+        id,
+        status as Exclude<PatchProposalStatus, "pending">
+      );
+      if (opts.json) say(JSON.stringify({ ok: true, meta }));
+      else check(`Patch proposal ${id}: ${status}`);
+    } catch (error) {
+      handleCliError(error, opts.json);
+    }
+  });
 
 const tunnelCmd = program.command("tunnel").description("Choose or inspect the public connection for this workspace");
 

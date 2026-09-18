@@ -6,6 +6,8 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { startBridge, type Bridge } from "../src/bridge/server.js";
 import { appendExecutionRecord } from "../src/execution/records.js";
 import { saveExecutionOutput } from "../src/execution/output.js";
+import { listPatchProposals } from "../src/proposal/store.js";
+import { authorizeProposalTask } from "../src/proposal/authorization.js";
 import { makeTmpDir, cleanup, write, makeGitRepo, git, isolateStateDir } from "./helpers.js";
 
 let root: string;
@@ -27,6 +29,19 @@ function structuredJsonOf<T = Record<string, unknown>>(result: { content?: unkno
   const parsed = jsonOf<T>(result);
   expect(result.structuredContent).toEqual(parsed);
   return parsed;
+}
+
+function proposalPatch(): string {
+  return [
+    "diff --git a/src/index.ts b/src/index.ts",
+    "index 1111111..2222222 100644",
+    "--- a/src/index.ts",
+    "+++ b/src/index.ts",
+    "@@ -1 +1 @@",
+    "-export const answer = 43; // changed",
+    "+export const answer = 44; // proposed",
+    "",
+  ].join("\n");
 }
 
 function expectToolOutputSchema(
@@ -58,7 +73,7 @@ beforeAll(async () => {
   });
   const tokens = bridge.authStore.issueTokens({
     clientId: "it-client",
-    scopes: ["workspace.read", "workspace.search", "git.read", "execution.read"],
+    scopes: ["workspace.read", "workspace.search", "git.read", "execution.read", "proposal.write"],
   });
   accessToken = tokens.accessToken;
 
@@ -76,7 +91,7 @@ afterAll(async () => {
 });
 
 describe("MCP tools over Streamable HTTP", () => {
-  it("lists all nine read-only tools", async () => {
+  it("lists nine read tools plus the isolated patch-proposal tool", async () => {
     const { tools } = await client.listTools();
     const names = tools.map((tool) => tool.name).sort();
     expect(names).toEqual([
@@ -87,11 +102,12 @@ describe("MCP tools over Streamable HTTP", () => {
       "list_directory",
       "read_file",
       "search_workspace",
+      "submit_patch",
       "test_status",
       "workspace_info",
     ]);
-    // no write tools in V1
-    for (const forbidden of ["write_file", "delete_file", "execute_shell", "git_commit", "install_package"]) {
+    // no tool can directly mutate repository files, shell state, or git history
+    for (const forbidden of ["write_file", "delete_file", "execute_shell", "git_commit", "install_package", "apply_patch"]) {
       expect(names).not.toContain(forbidden);
     }
 
@@ -104,6 +120,16 @@ describe("MCP tools over Streamable HTTP", () => {
     expectToolOutputSchema(tools, "test_status", ["available", "tests", "outputAvailable", "outputId"]);
     expectToolOutputSchema(tools, "execution_summary", ["records"]);
     expectToolOutputSchema(tools, "execution_output", ["action", "items", "text"]);
+    expectToolOutputSchema(tools, "submit_patch", [
+      "proposalId",
+      "taskId",
+      "status",
+      "sha256",
+      "paths",
+      "operations",
+      "risk",
+      "riskReasons",
+    ]);
   });
 
   it("documents git_diff pagination with its output field names", async () => {
@@ -191,6 +217,77 @@ describe("MCP tools over Streamable HTTP", () => {
     expect(second.offset).toBe(first.nextOffset);
     expect(second.diff.length).toBeGreaterThan(0);
     git(root, "reset", "big-change.txt");
+  });
+
+  it("submit_patch stores an isolated proposal without changing the workspace", async () => {
+    const before = fs.readFileSync(path.join(root, "src/index.ts"), "utf8");
+    authorizeProposalTask(bridge.workspace.id, "c2c_patch", 30);
+    const result = await client.callTool({
+      name: "submit_patch",
+      arguments: {
+        task_id: "c2c_patch",
+        iteration: 1,
+        patch: proposalPatch(),
+        summary: "Propose answer 44",
+      },
+    });
+    expect(result.isError ?? false).toBe(false);
+    const proposal = structuredJsonOf<{
+      proposalId: string;
+      status: string;
+      paths: string[];
+      sha256: string;
+      operations: { path: string; operation: string }[];
+      risk: string;
+    }>(result);
+    expect(proposal.proposalId).toMatch(/^p_[a-f0-9]{16}$/);
+    expect(proposal.status).toBe("pending");
+    expect(proposal.paths).toEqual(["src/index.ts"]);
+    expect(proposal.sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(proposal.operations).toEqual([{ path: "src/index.ts", operation: "modify" }]);
+    expect(proposal.risk).toBe("normal");
+    expect(fs.readFileSync(path.join(root, "src/index.ts"), "utf8")).toBe(before);
+    expect(listPatchProposals(bridge.workspace.id).some((item) => item.id === proposal.proposalId)).toBe(true);
+  });
+
+  it("submit_patch requires local authorization for the explicit coding task", async () => {
+    const result = await client.callTool({
+      name: "submit_patch",
+      arguments: {
+        task_id: "c2c_not_authorized",
+        iteration: 1,
+        patch: proposalPatch(),
+      },
+    });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("PROPOSAL_NOT_AUTHORIZED");
+  });
+
+  it("submit_patch requires the dedicated proposal.write scope", async () => {
+    const scoped = bridge.authStore.issueTokens({
+      clientId: "read-only-client",
+      scopes: ["workspace.read", "workspace.search", "git.read", "execution.read"],
+    });
+    const readOnlyClient = new Client({ name: "read-only-c2c-test", version: "1.0.0" });
+    const transport = new StreamableHTTPClientTransport(new URL(`${bridge.localBaseUrl()}/mcp`), {
+      requestInit: { headers: { authorization: `Bearer ${scoped.accessToken}` } },
+    });
+    await readOnlyClient.connect(transport);
+    try {
+      const result = await readOnlyClient.callTool({
+        name: "submit_patch",
+        arguments: {
+          task_id: "c2c_denied",
+          iteration: 1,
+          patch: proposalPatch(),
+        },
+      });
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toContain("INSUFFICIENT_SCOPE");
+      expect(textOf(result)).toContain("proposal.write");
+    } finally {
+      await readOnlyClient.close();
+    }
   });
 
   it("execution_summary and test_status read harness records", async () => {
