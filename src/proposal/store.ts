@@ -98,8 +98,17 @@ function utf8Bytes(value: string): number {
 }
 
 function normalizePatchPath(raw: string): string {
-  if (!raw || raw.includes("\0") || /[\r\n\t]/.test(raw) || raw.includes("\\")) {
-    throw new PatchProposalError("UNSAFE_PATCH_PATH", `Unsafe patch path: ${JSON.stringify(raw)}`);
+  if (
+    !raw ||
+    raw.includes("\0") ||
+    /\s/.test(raw) ||
+    raw.includes("\\") ||
+    raw.includes(":")
+  ) {
+    throw new PatchProposalError(
+      "UNSAFE_PATCH_PATH",
+      `Unsafe or ambiguous patch path: ${JSON.stringify(raw)}`
+    );
   }
   if (raw.startsWith('"') || raw.endsWith('"')) {
     throw new PatchProposalError(
@@ -120,13 +129,14 @@ function normalizePatchPath(raw: string): string {
   ) {
     throw new PatchProposalError("UNSAFE_PATCH_PATH", `Non-canonical patch path is not allowed: ${raw}`);
   }
+  const lower = normalized.toLowerCase();
   if (
-    normalized === ".git" ||
-    normalized.startsWith(".git/") ||
-    normalized === ".c2cignore" ||
-    normalized === ".c2c.json" ||
-    normalized === ".gitattributes" ||
-    normalized === ".gitmodules"
+    lower === ".git" ||
+    lower.startsWith(".git/") ||
+    lower === ".c2cignore" ||
+    lower === ".c2c.json" ||
+    lower === ".gitattributes" ||
+    lower === ".gitmodules"
   ) {
     throw new PatchProposalError(
       "UNSAFE_PATCH_PATH",
@@ -291,7 +301,22 @@ function classifyPatchRisk(
 }
 
 function targetFingerprint(workspace: Workspace, requested: string): TargetFingerprint {
-  if (workspace.ignoreRules.isNoise(requested) || workspace.ignoreRules.isNoise(requested + "/")) {
+  const lowerRequested = requested.toLowerCase();
+  if (
+    workspace.ignoreRules.isSensitive(requested) ||
+    workspace.ignoreRules.isSensitive(lowerRequested)
+  ) {
+    throw new PatchProposalError(
+      "UNSAFE_PATCH_PATH",
+      `Sensitive/custom-ignored paths cannot be modified through patch proposals: ${requested}`
+    );
+  }
+  if (
+    workspace.ignoreRules.isNoise(requested) ||
+    workspace.ignoreRules.isNoise(requested + "/") ||
+    workspace.ignoreRules.isNoise(lowerRequested) ||
+    workspace.ignoreRules.isNoise(lowerRequested + "/")
+  ) {
     throw new PatchProposalError(
       "UNSAFE_PATCH_PATH",
       `Generated/build/cache/noise paths cannot be modified through patch proposals: ${requested}`
