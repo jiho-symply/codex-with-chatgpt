@@ -60,6 +60,10 @@ Keep each control message below **4 KiB UTF-8**. The higher limit is for useful
 rationale, rejection reasons, and handoffs—not code transport. No diffs, patch
 bodies, logs, or file bodies are allowed in the control plane.
 
+The Skill measures the encoded byte length before sending and before acting on a
+C2C reply. Oversized replies are not actionable protocol messages: Codex asks
+for a compact restatement instead of truncating ids/state or executing content.
+
 ### INIT (Codex → ChatGPT)
 
 ```
