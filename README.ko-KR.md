@@ -10,14 +10,16 @@ ChatGPT 유료 구독의 웹 사용량은 남아 있는데 Codex/API 사용량�
 소비될 수 있습니다. 이 프로젝트는 **고수준 추론·계획·리뷰는 ChatGPT 웹 앱**에,
 **코드 수정·Shell·테스트·Git 실행은 Codex**에 맡기도록 역할을 분리합니다.
 
-API Key나 역방향 프록시를 사용하지 않고, 공식 ChatGPT 웹 UI와 읽기 전용 MCP
-브리지를 사용합니다.
+API Key나 역방향 프록시를 사용하지 않고, 공식 ChatGPT 웹 UI와 repository
+읽기 전용 MCP + 격리된 patch-proposal 채널을 사용합니다.
 
 ## 무엇인가
 
-ChatGPT 웹 앱을 Codex 코딩 세션의 계획·리뷰 계층으로 사용합니다. 저장소 전체를
-업로드하지 않습니다. ChatGPT는 OAuth로 보호된 읽기 전용 MCP 연결을 통해 필요한
-파일, 검색 결과, Git diff, 테스트 기록만 요청해서 읽습니다.
+ChatGPT 웹 앱을 Codex 코딩 세션의 계획·코딩 proposal·리뷰 계층으로 사용합니다.
+저장소 전체를 업로드하지 않습니다. ChatGPT의 repository 접근은 읽기 전용이며,
+coding-subagent로 명시적으로 요청한 경우에만 repository 밖의 격리 저장소에
+patch proposal을 제출할 수 있습니다. 실제 파일 수정, Shell, 테스트, Git은
+Codex만 수행합니다.
 
 ## ChatGPT 모델 및 reasoning effort 선택
 
@@ -62,6 +64,48 @@ c2c prefs set --model default --effort default
 ```
 
 설정은 **새 C2C 대화부터 적용**됩니다.
+
+## Coding subagent로 코드 patch 작성
+
+기본 동작은 기존과 같습니다. ChatGPT가 계획/리뷰를 맡고 Codex가 코드를 작성합니다.
+ChatGPT에게 실제 코드 변경안까지 맡기고 싶으면 다음처럼 요청합니다.
+
+```text
+Codex with ChatGPT를 coding subagent로 사용해서 이 기능 구현해줘.
+ChatGPT가 코드 patch까지 작성하게 해줘.
+```
+
+이 모드에서 ChatGPT는 `submit_patch`로 patch **proposal**을 제출할 수 있습니다.
+하지만 MCP가 repository에 patch를 적용하지는 않습니다.
+
+Codex는 적용 전에 다음 절차를 강제합니다.
+
+1. proposal의 task/iteration/id와 SHA-256 무결성 확인
+2. 제출 시점 대상 파일 fingerprint와 현재 파일을 비교해 stale 여부 확인
+3. dependency manifest, CI/CD, Docker/task 설정, Shell/PowerShell script 등
+   실행 민감 파일이면 사용자에게 명시적 승인 요청
+4. Codex가 patch 내용을 로컬에서 직접 검토
+5. `git apply --check` 통과 확인
+6. Codex의 Shell로만 실제 적용
+7. 테스트 후 ChatGPT가 실제 Git diff를 다시 독립 리뷰
+
+proposal 채널은 다음을 차단합니다.
+
+- `.env`, key/credential, `.c2cignore`, `.c2c.json`, `.git/*`
+- workspace 밖 경로, traversal, symlink 경유
+- binary patch
+- rename/copy 및 permission-only 변경
+- submodule patch
+- 위험한 terminal control character
+- 256 KiB 초과 patch
+- 32개 초과 파일 변경
+
+patch 제출은 별도의 OAuth 권한 `proposal.write`를 사용합니다. 이 권한은
+**repository write/Shell/Git 권한을 주지 않습니다.**
+
+C2C 제어 메시지 제한은 **4 KiB UTF-8**로 늘렸습니다. 이 공간은 plan/rationale/
+handoff를 더 충실하게 전달하기 위한 것이며, 코드·diff·로그·patch 본문을 Chat에
+넣는 용도로 사용할 수 없습니다.
 
 ## 한 번에 설치
 
@@ -108,7 +152,7 @@ Project 안에 새 ChatGPT chat을 만듭니다.
                         ▼          │
              ┌─────────────────────┐
              │      C2C Bridge     │
-             │    읽기 전용 MCP    │
+             │ repo RO + proposal MCP │
              │  OAuth + Pairing    │
              │   Tunnel Manager    │
              └──────────┬──────────┘
@@ -120,15 +164,16 @@ Project 안에 새 ChatGPT chat을 만듭니다.
                                               └─────────────────────┘
 ```
 
-- **제어 면**: Codex와 ChatGPT는 작은 `[C2C]` 상태 메시지만 주고받습니다.
-  `INIT → PLAN → EXECUTED → REVIEW → DONE`
-- **데이터 면**: ChatGPT는 9개의 읽기 전용 MCP 도구를 통해 필요한 정보만 읽습니다.
-- **독립 리뷰**: Codex가 실행을 끝내면 ChatGPT가 실제 Git diff와 테스트 기록을
-  직접 확인할 수 있습니다.
+- **제어 면**: 4 KiB 미만의 `[C2C]` 상태/근거 메시지만 주고받으며 코드·diff·
+  로그·patch 본문은 전달하지 않습니다.
+- **데이터 면**: 9개의 읽기 도구와 격리 proposal 전용 `submit_patch`를 사용합니다.
+- **실행/리뷰 분리**: Codex만 실제 적용·Shell·테스트를 수행하고, ChatGPT는
+  결과 Git diff를 다시 독립적으로 검토합니다.
 
 ## 보안 모델
 
-- 서버에 쓰기/삭제/Shell/commit 도구 자체가 없습니다.
+- ChatGPT에는 repository 쓰기/삭제/Shell/patch apply/commit 도구가 없습니다.
+  `submit_patch`는 별도 상태 디렉터리에 proposal만 저장합니다.
 - 각 토큰은 하나의 workspace 경계에 묶입니다.
 - `.env*`, SSH key, credential 등 민감한 파일은 기본 차단됩니다.
 - MCP endpoint는 OAuth 2.1 + PKCE를 사용합니다.
