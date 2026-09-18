@@ -5,7 +5,8 @@ description: >
   while Codex keeps full execution ownership. Use when the user says
   "Codex with ChatGPT 사용" / "Set up Codex with ChatGPT" / "ChatGPT로 계획해줘",
   when they ask to connect ChatGPT to the current workspace, disconnect it,
-  or run a task through the ChatGPT planning loop.
+  configure/reconfigure the ChatGPT model or reasoning effort, or run a task
+  through the ChatGPT planning loop.
 ---
 
 # Codex with ChatGPT
@@ -72,19 +73,24 @@ whatever data it needs by itself.
    Each workspace also has exactly ONE ChatGPT connector. Do not create a
    second connector for the same workspace. Other workspaces may have their
    own connectors — never edit those.
-7. **Preferred ChatGPT model.** Read `c2c prefs --json` before opening a NEW
-   ChatGPT conversation. If `chatgptModel` is non-null, select the model whose
-   visible label exactly matches that value before sending the boot prompt.
-   - Apply this only to NEW conversations. Never switch models mid-task in an
-     existing conversation unless the user explicitly asks.
-   - Use the model picker in the ChatGPT web UI through the same IAB tab. Prefer
-     DOM/text selectors; do not use screenshot-coordinate clicking.
-   - If the exact model is unavailable for the signed-in account, STOP before
-     sending the boot prompt and tell the user that the configured model is not
-     available. Do not silently fall back to another model.
-   - If `chatgptModel` is null, leave ChatGPT's default model unchanged.
-   Users configure this with `c2c prefs set --model "<visible model label>"`;
-   `c2c prefs set --model default` clears the preference.
+7. **Preferred ChatGPT model + effort.** Read `c2c prefs --json` before opening
+   a NEW ChatGPT conversation.
+   - `chatgptModel` stores the chosen model-family label and
+     `chatgptEffort` stores the chosen reasoning/effort label.
+   - Apply them only to NEW conversations. Never switch model/effort mid-task in
+     an existing conversation unless the user explicitly asks.
+   - Use the ChatGPT web picker through the same IAB tab. Prefer DOM/text/ARIA
+     selectors; never use screenshot-coordinate clicking.
+   - If ChatGPT exposes model and effort as separate controls, select model
+     first and effort second. If the UI exposes a flattened picker, select the
+     visible option whose accessible metadata corresponds to the saved pair.
+   - Verify the selected state before sending the boot prompt. If either saved
+     choice is no longer available, STOP and offer the **Model configuration**
+     workflow. Never silently fall back.
+   - If `chatgptModel` is null, keep ChatGPT's default selection.
+   Direct `c2c prefs set --model/--effort` commands are storage primitives;
+   normal users should use **Model configuration** so they never need to know
+   model names in advance.
 8. After first-time setup, never ask the user to approve writing C2C's local
    settings directory. Run `c2c sandbox-allow --json` (idempotent). If it fails
    with EPERM / Operation not permitted, request elevated permissions and retry
@@ -157,15 +163,16 @@ that close the tab, hide the window, or stall on the settings page.
 6. **Batch.** Fill a known form in one Playwright / `js` script when you can.
    After an action, one cheap DOM check. Do not screenshot-poll.
 
-7. **One conversation, Chat mode + model selection.** The first ChatGPT chat is
-   the C2C conversation. Chat and Work are separate: a Work conversation cannot
-   become Chat. On every NEW conversation, if a Chat/Work switcher is visible
-   (often top-left), confirm **Chat** is selected before the boot prompt.
-   Then read `c2c prefs --json`. If `chatgptModel` is non-null, open the model
-   picker and select the exact visible model label. Verify that the selected
-   label matches before sending the boot prompt. If unavailable, stop and ask
-   the user to choose another model or clear the preference. If it is Work, do not continue there — Switch to a new Chat
-   conversation (HANDOFF). If no switcher is visible, do not hunt menus; continue.
+7. **One conversation, Chat mode + model/effort selection.** The first ChatGPT
+   chat is the C2C conversation. Chat and Work are separate: a Work conversation
+   cannot become Chat. On every NEW conversation, if a Chat/Work switcher is
+   visible (often top-left), confirm **Chat** is selected before the boot prompt.
+   Then read `c2c prefs --json`. If `chatgptModel` is non-null, apply the saved
+   model and, when non-null, `chatgptEffort`. Use the same detection/selection
+   logic as **Model configuration** and verify the resulting UI state. If either
+   choice is unavailable, stop before the boot prompt and offer to reconfigure.
+   If it is Work, do not continue there — switch to a new Chat conversation
+   (HANDOFF). If no switcher is visible, do not hunt menus; continue.
    Send the boot prompt and the workspace_info check in that Chat conversation.
    Confirm the reply names the current workspace **before** saving or replacing
    the session URL. If validation fails, keep the old saved URL. Do not open a
@@ -264,6 +271,78 @@ Speak only of 临时地址 / 固定域名 / 登录 Cloudflare.
 4. Never put connection credentials in the project. The CLI stores them in
    the C2C state directory.
 
+## Workflow: model configuration ("모델 설정" / "모델 재설정" / "ChatGPT 모델 바꿔줘")
+
+This is the user-facing way to choose a model. Never ask the user to type a
+model name from memory and never send them to MCP/connector settings.
+
+1. Run `c2c prefs --json` and remember the current `chatgptModel` and
+   `chatgptEffort`.
+2. Reuse the one IAB ChatGPT tab, foreground + `markHandoff`. Open an **unsent
+   new Chat** surface only for inspecting selectors; do not send a message and
+   do not save it as the C2C session. This inspection page is an explicit
+   exception to the normal conversation-reuse rule.
+3. Open the ChatGPT model picker and inspect the live DOM/ARIA structure.
+   The signed-in web UI is the source of truth for availability:
+   - collect enabled, actually visible selectable entries;
+   - do not use a hard-coded plan/model list as the authority;
+   - ignore disabled/upgrade-only entries unless they are clearly selectable;
+   - use accessible labels/descriptions/submenus to distinguish **model family**
+     from **reasoning/effort**.
+   If the UI is flattened (for example effort-first entries), group entries by
+   the underlying model label only when the DOM/accessibility text makes that
+   mapping explicit. If it does not, do not invent a model-family mapping:
+   present the raw available choices instead and explain that this account's
+   picker is flattened.
+4. Show the user a numbered **available model list** in Codex, including the
+   current saved model when applicable. Also include "ChatGPT 기본값 사용".
+   Example shape only (never hard-code these as the real options):
+
+   ```
+   사용 가능한 ChatGPT 모델
+   1. GPT-5.6 Sol
+   2. GPT-5.6 Sol Pro
+   3. GPT-6 Pro
+   0. ChatGPT 기본값 사용
+
+   현재 설정: GPT-5.6 Sol / High
+   번호를 선택하세요.
+   ```
+
+   Wait for the user's choice. Accept the number or exact displayed name.
+5. If the user selects the default, run
+   `c2c prefs set --model default --effort default --json`, confirm that future
+   new chats will use ChatGPT's default, and finish.
+6. For a selected model, use the picker DOM to enumerate the **effort/reasoning
+   choices that are actually available for that model on this account**.
+   Temporarily selecting the model on the unsent page is allowed when necessary
+   to reveal its effort controls.
+   - Never assume Instant/Medium/High/Extra High/Pro availability from the plan.
+   - Do not show an effort that is disabled or absent.
+   - If there is no separate effort control for that model, say so and store the
+     model with effort cleared.
+7. Show the numbered effort list, for example:
+
+   ```
+   GPT-5.6 Sol에서 사용 가능한 effort
+   1. Instant
+   2. Medium
+   3. High
+   4. Extra High
+
+   번호를 선택하세요.
+   ```
+
+   Wait for the user's choice.
+8. Save the **exact discovered labels**, not the numeric indices:
+   `c2c prefs set --model "<model label>" --effort "<effort label>" --json`.
+   If there is no separate effort, use
+   `c2c prefs set --model "<model label>" --effort default --json`.
+9. Read `c2c prefs --json` once to verify persistence, then tell the user the
+   final model/effort in one line and note that it applies to **new C2C chats**.
+   Leave the IAB tab in standby. Do not create a ChatGPT history item merely for
+   configuration.
+
 ## Workflow: first-time setup（"使用 Codex with ChatGPT 完成首次配置"）
 
 1. Detect prerequisites yourself: `node --version` (>= 20), and check `cloudflared`.
@@ -282,9 +361,11 @@ Speak only of 临时地址 / 固定域名 / 登录 Cloudflare.
    Authorize / pairing form is on screen: run `c2c pair --json` then type
    that code immediately. Doctor does not pre-mint a code.
 4. `c2c prefs --json` (this machine, not this workspace).
-   - `chatgptModel` is the optional preferred model for newly created chats.
-     If set, step 6 must select that exact visible model label before the boot
-     prompt. If null, keep ChatGPT's default.
+   - `chatgptModel` and `chatgptEffort` are optional preferences for newly
+     created chats. If set, step 6 applies both before the boot prompt.
+   - Do not ask for a raw model name during setup. If the user wants to choose
+     or change them, run **Model configuration**, which discovers the live
+     account-specific choices from ChatGPT's web UI.
    - If `setupMode` is null: tell the user exactly `setupChoicePrompt`. Wait
      for「1」or「2」. Then `c2c prefs set --setup-mode auto` or `--setup-mode manual`.
      Do not open ChatGPT settings and do not start automatic configuration
@@ -321,9 +402,9 @@ Speak only of 临时地址 / 固定域名 / 登录 Cloudflare.
      tools on this page.
 6. Same tab: open the first C2C chat per **Conversation management**
    (Project collection for a new workspace; `https://chatgpt.com/` only
-   in long-chat). Confirm Chat mode and apply the preferred model per
-   **In-app browser** §7. If the configured model is unavailable, do not send
-   the boot prompt. Send the boot prompt from
+   in long-chat). Confirm Chat mode and apply the preferred model/effort per
+   **In-app browser** §7. If either configured choice is unavailable, do not
+   send the boot prompt; offer **Model configuration**. Send the boot prompt from
    `docs/protocol.md` §Boot Prompt, then (same chat) send:
    `Use the "<connectorName>" connector: call workspace_info and read hello-style top-level file. Reply with the workspace name.`
    Confirm the reply matches `workspaceName` (wait per **In-app browser** §8).
