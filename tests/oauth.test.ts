@@ -51,7 +51,7 @@ async function authorizeWithPairing(
   authorizeUrl.searchParams.set("state", state);
   authorizeUrl.searchParams.set("code_challenge", challenge);
   authorizeUrl.searchParams.set("code_challenge_method", "S256");
-  authorizeUrl.searchParams.set("scope", "workspace.read workspace.search git.read execution.read offline_access");
+  authorizeUrl.searchParams.set("scope", "workspace.read workspace.search git.read execution.read proposal.write offline_access");
 
   const pageResponse = await fetch(authorizeUrl, { redirect: "manual" });
   const html = await pageResponse.text();
@@ -95,9 +95,14 @@ describe("discovery metadata", () => {
   it("serves protected resource metadata", async () => {
     const response = await fetch(`${base}/.well-known/oauth-protected-resource/mcp`);
     expect(response.status).toBe(200);
-    const body = (await response.json()) as { resource: string; authorization_servers: string[] };
+    const body = (await response.json()) as {
+      resource: string;
+      authorization_servers: string[];
+      scopes_supported: string[];
+    };
     expect(body.resource).toContain("/mcp");
     expect(body.authorization_servers.length).toBe(1);
+    expect(body.scopes_supported).toContain("proposal.write");
   });
 
   it("serves authorization server metadata with PKCE S256", async () => {
@@ -106,6 +111,7 @@ describe("discovery metadata", () => {
     expect(body.code_challenge_methods_supported).toEqual(["S256"]);
     expect(body.grant_types_supported).toEqual(["authorization_code", "refresh_token"]);
     expect(body.registration_endpoint).toContain("/oauth/register");
+    expect(body.scopes_supported).toContain("proposal.write");
   });
 });
 
@@ -123,6 +129,8 @@ describe("authorization + token flow", () => {
     expect(token.body.access_token).toMatch(/^c2c_at_/);
     expect(token.body.refresh_token).toMatch(/^c2c_rt_/);
     expect(token.body.token_type).toBe("Bearer");
+    expect(token.body.scope).toContain("proposal.write");
+    expect(bridge.authStore.hasActiveScope("proposal.write")).toBe(true);
 
     // authorized MCP request
     const mcpResponse = await fetch(`${base}/mcp`, {
