@@ -52,6 +52,7 @@ import {
   WAITING_FOR,
   type ConversationMode,
   type ProtocolState,
+  type TaskMode,
   type WaitingFor,
 } from "../session/state.js";
 import { appendExecutionRecord } from "../execution/records.js";
@@ -63,6 +64,11 @@ import {
   readPatchProposal,
   type PatchProposalStatus,
 } from "../proposal/store.js";
+import {
+  authorizeProposalTask,
+  listAuthorizedProposalTasks,
+  revokeProposalTask,
+} from "../proposal/authorization.js";
 
 const program = new Command();
 
@@ -927,6 +933,7 @@ session
   .option("--connector-name <name>", "exact connector title for this workspace")
   .option("--protocol-state <state>", "checkpoint protocol state, e.g. EXECUTED_SENT")
   .option("--waiting-for <who>", "none | GPT_PLAN | GPT_ACTION | GPT_REVIEW | USER")
+  .option("--task-mode <mode>", "plan | code | auto | review")
   .option("--proposal-id <id>", "active patch proposal id for crash-safe resume")
   .option("--goal <text>", "original task goal for resume / HANDOFF")
   .option("--completed-subtasks <text>")
@@ -946,6 +953,7 @@ session
       connectorName?: string;
       protocolState?: string;
       waitingFor?: string;
+      taskMode?: string;
       proposalId?: string;
       goal?: string;
       completedSubtasks?: string;
@@ -971,6 +979,10 @@ session
       if (waitingNorm && !WAITING_FOR.includes(waitingNorm as WaitingFor)) {
         throw new Error(`waiting-for must be one of ${WAITING_FOR.join(", ")}`);
       }
+      const taskModeRaw = opts.taskMode?.trim().toLowerCase();
+      if (taskModeRaw && !["plan", "code", "auto", "review"].includes(taskModeRaw)) {
+        throw new Error("task-mode must be plan, code, auto, or review");
+      }
       const saved = mergeSession(readSession(workspace.id), {
         url: opts.url,
         title: opts.title,
@@ -985,6 +997,7 @@ session
           ? {
               protocolState: protocolRaw as ProtocolState,
               waitingFor: (waitingNorm as WaitingFor | undefined) ?? undefined,
+              taskMode: taskModeRaw as TaskMode | undefined,
               proposalId: opts.proposalId,
               originalGoal: opts.goal,
               completedSubtasks: opts.completedSubtasks,
@@ -1165,6 +1178,72 @@ program
 const proposalCmd = program
   .command("proposal")
   .description("Inspect patch proposals submitted by ChatGPT; this command never applies them");
+
+proposalCmd
+  .command("authorize")
+  .description("Temporarily authorize patch proposals for one explicit coding task")
+  .requiredOption("--task <id>", "current C2C task id")
+  .option("-w, --workspace <path>")
+  .option("--ttl-minutes <n>", "authorization lifetime in minutes", parseInteger, 240)
+  .option("--json", "machine-readable output", false)
+  .action((opts: { task: string; workspace?: string; ttlMinutes: number; json: boolean }) => {
+    try {
+      const workspace = new Workspace(resolveWorkspace(opts.workspace));
+      const authorization = authorizeProposalTask(workspace.id, opts.task, opts.ttlMinutes);
+      if (opts.json) {
+        say(JSON.stringify({ ok: true, authorization }));
+        return;
+      }
+      check(`Patch proposal permission granted for task ${authorization.taskId} until ${new Date(authorization.expiresAt).toISOString()}`);
+    } catch (error) {
+      handleCliError(error, opts.json);
+    }
+  });
+
+proposalCmd
+  .command("authorization")
+  .description("Show active per-task patch proposal authorizations")
+  .option("-w, --workspace <path>")
+  .option("--json", "machine-readable output", false)
+  .action((opts: { workspace?: string; json: boolean }) => {
+    try {
+      const workspace = new Workspace(resolveWorkspace(opts.workspace));
+      const tasks = listAuthorizedProposalTasks(workspace.id);
+      if (opts.json) {
+        say(JSON.stringify({ ok: true, tasks }));
+        return;
+      }
+      if (tasks.length === 0) {
+        say("활성화된 coding-subagent patch 권한이 없습니다.");
+        return;
+      }
+      for (const item of tasks) {
+        say(`${item.taskId}  expires=${new Date(item.expiresAt).toISOString()}`);
+      }
+    } catch (error) {
+      handleCliError(error, opts.json);
+    }
+  });
+
+proposalCmd
+  .command("revoke")
+  .description("Revoke temporary patch proposal authorization for one task or all tasks")
+  .option("--task <id>", "task id; omit to revoke all proposal task authorizations")
+  .option("-w, --workspace <path>")
+  .option("--json", "machine-readable output", false)
+  .action((opts: { task?: string; workspace?: string; json: boolean }) => {
+    try {
+      const workspace = new Workspace(resolveWorkspace(opts.workspace));
+      const result = revokeProposalTask(workspace.id, opts.task);
+      if (opts.json) {
+        say(JSON.stringify({ ok: true, ...result }));
+        return;
+      }
+      check(`Patch proposal permission revoked: ${result.revoked}`);
+    } catch (error) {
+      handleCliError(error, opts.json);
+    }
+  });
 
 proposalCmd
   .command("list", { isDefault: true })
