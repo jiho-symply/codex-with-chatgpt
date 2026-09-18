@@ -191,6 +191,7 @@ interface AdminInfo {
   publicUrl: string | null;
   tunnel: { running: boolean; url: string | null; provider: string };
   tokenCount: number;
+  proposalWriteAuthorized: boolean;
   pairingActive: boolean;
   pid: number;
   startedAt: string;
@@ -521,6 +522,7 @@ program
     const tunnelState = workspace ? readTunnelState(workspace.id) : null;
     const namedReady = tunnelState ? isNamedTunnelReady(tunnelState) : false;
     let namedRepair: { needed: boolean; userMessage?: string } = { needed: false };
+    let capabilities = { proposalWriteAuthorized: false };
     let chatgptRepair: {
       needed: boolean;
       reason?: string;
@@ -551,12 +553,14 @@ program
 
     if (runtime) {
       let info = await adminFetch<AdminInfo>(runtime, "GET", "/admin/info");
+      capabilities = { proposalWriteAuthorized: info.proposalWriteAuthorized };
       if (namedReady && opts.fix && info.tunnel.provider !== "cloudflare-named") {
         await stopBridge(root);
         await new Promise((resolve) => setTimeout(resolve, 400));
         try {
           runtime = (await ensureBridge(root)).runtime;
           info = await adminFetch<AdminInfo>(runtime, "GET", "/admin/info");
+          capabilities = { proposalWriteAuthorized: info.proposalWriteAuthorized };
           results.push("已切换到固定域名连接");
         } catch (error) {
           report.tunnel = { ok: false, detail: (error as Error).message };
@@ -586,6 +590,7 @@ program
               currentUrl = started.url;
               healthy = true;
               info = await adminFetch<AdminInfo>(runtime, "GET", "/admin/info");
+              capabilities = { proposalWriteAuthorized: info.proposalWriteAuthorized };
               const sameAddress =
                 previousUrl && normalizePublicUrl(previousUrl) === normalizePublicUrl(started.url);
               results.push(sameAddress ? "已重新建立安全连接" : "已重新建立安全连接（地址已更换）");
@@ -660,7 +665,7 @@ program
     }
 
     if (opts.json) {
-      say(JSON.stringify({ report, repairs: results, chatgptRepair, namedRepair }));
+      say(JSON.stringify({ report, repairs: results, chatgptRepair, namedRepair, capabilities }));
       return;
     }
     say(`${PRODUCT_NAME} Doctor`);
