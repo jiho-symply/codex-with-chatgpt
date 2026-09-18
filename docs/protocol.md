@@ -121,8 +121,11 @@ Plans must be finite, concrete, executable. Not 40-step epics.
 - `auto` — ChatGPT may choose PLAN or PATCH based on task size/risk.
 - `review` — inspect existing changes; do not submit a patch unless explicitly asked.
 
-In `code` mode ChatGPT reads current files through MCP, creates a standard
-text-only unified diff, calls `submit_patch`, and then sends only:
+In `code` mode Codex first creates the task id and grants a temporary local
+proposal authorization for that exact task (`c2c proposal authorize --task ...`).
+OAuth `proposal.write` alone is insufficient. ChatGPT then reads current files
+through MCP, creates a standard text-only unified diff, calls `submit_patch`,
+and sends only:
 
 ```
 [C2C]
@@ -171,7 +174,8 @@ Target file changed after proposal submission. Re-read current files and submit 
 
 ChatGPT then re-reads through MCP and may submit a new proposal. A proposal ID
 is single-task metadata; Codex must never apply an id from a different
-TASK_ID/ITERATION.
+TASK_ID/ITERATION. Temporary task authorization expires automatically (default
+4 hours) and is revoked on DONE/BLOCKED. Plan/review mode never grants it.
 
 ### EXECUTED (Codex → ChatGPT)
 
