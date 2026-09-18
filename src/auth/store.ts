@@ -261,6 +261,20 @@ export class AuthStore {
     return this.tokens.size;
   }
 
+  activeScopes(): string[] {
+    const scopes = new Set<string>();
+    for (const token of this.tokens.values()) {
+      if (!token.revoked && token.expiresAt > Date.now()) {
+        for (const scope of token.scopes) scopes.add(scope);
+      }
+    }
+    return [...scopes].sort();
+  }
+
+  hasActiveScope(scope: string): boolean {
+    return this.activeScopes().includes(scope);
+  }
+
   static deleteStateFile(workspaceId: string): void {
     const file = path.join(getStateDir(), "auth", `${workspaceId}.json`);
     try {
