@@ -3,7 +3,7 @@
 ```
              ┌───────────────────────────┐
              │    ChatGPT Web / Sol      │
-             │  Reason / Plan / Review   │
+             │ Reason / Plan / Patch / Review │
              └──────────┬──────────▲─────┘
                         │          │
                MCP      │          │ Computer Use
@@ -11,7 +11,7 @@
                         ▼          │
              ┌─────────────────────┐
              │      C2C Bridge     │
-             │  MCP Server (RO)    │
+             │ MCP: repo RO + proposals │
              │  OAuth AS + PRM     │
              │  Pairing Manager    │
              │  Tunnel Manager     │
@@ -31,9 +31,10 @@
 ## Principles
 
 - **ChatGPT thinks. Codex works.** The bridge never re-implements a coding harness.
-- **Computer Use = control plane**: tiny `[C2C]` state messages (< 1 KB).
-- **MCP = data plane**: ChatGPT pulls files/diffs/search results itself.
-- **Read-only by design**: no write/exec tools exist in V1 at all.
+- **Web UI = control plane**: bounded `[C2C]` state/rationale messages (< 4 KiB); never code/diff/log bodies.
+- **MCP = data plane**: ChatGPT pulls files/diffs/search results and may submit a bounded patch proposal.
+- **Repository read-only by design**: MCP has no workspace write/delete, shell, patch-apply, commit, or package-install capability.
+- **Proposal isolation**: `submit_patch` writes only to the C2C state directory under a dedicated OAuth scope; Codex must independently validate/apply it.
 - **Workspace is the security boundary**: one bridge = one workspace = one token audience.
 
 ## Components (src/)
@@ -41,7 +42,8 @@
 | Module | Responsibility |
 | --- | --- |
 | `bridge/` | Express app assembly, loopback-only listener, port fallback, runtime state, admin API |
-| `mcp/` | McpServer with 9 read-only tools; stateless Streamable HTTP transport (fresh server per request, JSON responses) |
+| `mcp/` | McpServer with 9 repository/execution read tools plus non-applying `submit_patch`; stateless Streamable HTTP transport |
+| `proposal/` | Bounded patch validation, sensitive/path/symlink policy, SHA-256 integrity, target fingerprints, risk classification, isolated 0600 proposal storage |
 | `auth/` | OAuth 2.1 authorization server: discovery metadata (RFC 8414 + Protected Resource Metadata), dynamic client registration (RFC 7591), authorization-code + PKCE (S256 only), refresh rotation, revocation (RFC 7009). Opaque tokens stored as SHA-256 hashes |
 | `pairing/` | PairingCode lifecycle: CSPRNG generation, TTL, attempt limits, IP rate limit, one-time use |
 | `workspace/` | Canonical-path containment (realpath of deepest existing ancestor), sensitive-file policy, `.c2cignore`, paginated read/list, ripgrep search with Node fallback, git status/diff with pagination |
@@ -53,9 +55,14 @@
 
 ## Request lifecycles
 
-**MCP call**: ChatGPT → tunnel (https) → bridge `/mcp` → bearer middleware
+**Read MCP call**: ChatGPT → tunnel (https) → bridge `/mcp` → bearer middleware
 (401/403) → stateless StreamableHTTP transport → tool handler → workspace layer
 (path containment → ignore rules → pagination) → JSON result.
+
+**Patch proposal**: ChatGPT → `submit_patch` (`proposal.write`) → size/format/path/
+sensitive/symlink/mode/submodule validation → target SHA-256 fingerprints + risk
+classification → owner-only C2C state file. The workspace is unchanged. Codex
+later verifies integrity/staleness and `git apply --check` before any apply.
 
 **Authorization**: 401 with `WWW-Authenticate: resource_metadata=…` →
 `/.well-known/oauth-protected-resource/mcp` → AS metadata → DCR →
