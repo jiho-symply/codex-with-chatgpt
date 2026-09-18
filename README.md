@@ -99,8 +99,11 @@ The proposal channel rejects sensitive/generated/C2C/Git-control paths,
 traversal/symlink targets, binary patches, rename/copy, permission-only changes,
 submodules, unsafe control characters, patches over 256 KiB, and proposals
 touching more than 32 files. File deletion is permitted only as an
-approval-required operation. Patch submission has a separate OAuth scope, `proposal.write`;
-it does **not** grant repository write, shell, or git permissions.
+approval-required operation. Patch submission has a separate OAuth scope, `proposal.write`, **plus a
+temporary local authorization for the exact active coding TASK_ID**. OAuth
+permission alone cannot submit patches. The task authorization defaults to four
+hours and is revoked when the task finishes or blocks. Neither permission grants
+repository write, shell, or git capability.
 
 Control-plane C2C messages may now be up to **4 KiB UTF-8**, but this extra
 space is only for rationale/state/handoff. Code, diffs, logs, and patch bodies
