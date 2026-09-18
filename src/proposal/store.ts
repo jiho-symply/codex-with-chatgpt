@@ -265,6 +265,9 @@ export function validatePatchProposal(
   if (patch.includes("\0")) {
     throw new PatchProposalError("INVALID_PATCH", "Patch contains a NUL byte.");
   }
+  if (/[\x01-\x08\x0B\x0C\x0E-\x1F\x7F]/.test(patch)) {
+    throw new PatchProposalError("INVALID_PATCH", "Patch contains unsafe control characters.");
+  }
 
   const lines = patch.replace(/\r\n/g, "\n").split("\n");
   const starts: number[] = [];
@@ -392,6 +395,11 @@ export function readPatchProposal(
   }
   const changed = stalePaths(workspace, meta);
   return { meta, patch, stalePaths: changed, stale: changed.length > 0 };
+}
+
+export function patchProposalBodyPath(workspaceId: string, id: string): string {
+  proposalById(workspaceId, id);
+  return patchFile(workspaceId, id);
 }
 
 export function listPatchProposals(workspaceId: string, limit = 20): PatchProposalMeta[] {
