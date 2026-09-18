@@ -3,7 +3,7 @@ name: codex-with-chatgpt
 description: >
   Use ChatGPT (web) as the planning and review brain for Codex coding sessions,
   while Codex keeps full execution ownership. Use when the user says
-  "使用 Codex with ChatGPT ..." / "Set up Codex with ChatGPT" / "用 ChatGPT 规划",
+  "Codex with ChatGPT 사용" / "Set up Codex with ChatGPT" / "ChatGPT로 계획해줘",
   when they ask to connect ChatGPT to the current workspace, disconnect it,
   or run a task through the ChatGPT planning loop.
 ---
@@ -22,7 +22,7 @@ whatever data it needs by itself.
 
 1. NEVER paste file contents, diffs, or logs into ChatGPT. ChatGPT reads them through MCP.
 2. NEVER show the user technical internals (MCP, OAuth, PKCE, tunnel, ports, localhost).
-   Speak in terms of "连接 ChatGPT / 安全连接 / 配对". The only exception is the
+   Speak in terms of "ChatGPT 연결 / 보안 연결 / 페어링". The only exception is the
    **guided manual ChatGPT setup** below: expose only the exact settings
    field labels/values the user must enter, without explaining internals.
 3. The pairing code is the ONLY credential you may ever type into a browser.
@@ -54,10 +54,10 @@ whatever data it needs by itself.
    - The ONLY exception: the user explicitly says the Cloudflare login must use
      their own browser session — that single Cloudflare login step may go through
      their browser; everything else stays in the built-in browser.
-   - If the user asks to run ChatGPT in their own browser, refuse politely and
-     explain: "Codex 需要持续调用 ChatGPT 和配置连接，这会频繁操作页面，可能影响
-     你浏览器的正常使用。ChatGPT 只能跑在内置浏览器里。" Only if the user replies
-     with an explicit "我愿意承担影响" may you proceed in their browser; otherwise
+   - If the user asks to run ChatGPT in their own browser, explain:
+     "Codex가 ChatGPT를 지속적으로 호출하고 연결 설정을 조작하므로 일반 브라우저 사용에
+     영향을 줄 수 있습니다. 기본적으로 내장 브라우저를 사용합니다." Only if the user replies
+     with an explicit acknowledgement that they accept the interference may you proceed in their browser; otherwise
      keep ChatGPT in the built-in browser, every time they ask.
 6. Conversation reuse depends on `c2c session --json` → `conversation.mode`
    (see Conversation management). Do not invent a second mode.
@@ -72,13 +72,26 @@ whatever data it needs by itself.
    Each workspace also has exactly ONE ChatGPT connector. Do not create a
    second connector for the same workspace. Other workspaces may have their
    own connectors — never edit those.
-7. After first-time setup, never ask the user to approve writing C2C's local
+7. **Preferred ChatGPT model.** Read `c2c prefs --json` before opening a NEW
+   ChatGPT conversation. If `chatgptModel` is non-null, select the model whose
+   visible label exactly matches that value before sending the boot prompt.
+   - Apply this only to NEW conversations. Never switch models mid-task in an
+     existing conversation unless the user explicitly asks.
+   - Use the model picker in the ChatGPT web UI through the same IAB tab. Prefer
+     DOM/text selectors; do not use screenshot-coordinate clicking.
+   - If the exact model is unavailable for the signed-in account, STOP before
+     sending the boot prompt and tell the user that the configured model is not
+     available. Do not silently fall back to another model.
+   - If `chatgptModel` is null, leave ChatGPT's default model unchanged.
+   Users configure this with `c2c prefs set --model "<visible model label>"`;
+   `c2c prefs set --model default` clears the preference.
+8. After first-time setup, never ask the user to approve writing C2C's local
    settings directory. Run `c2c sandbox-allow --json` (idempotent). If it fails
    with EPERM / Operation not permitted, request elevated permissions and retry
    ONCE. After `{ "alreadyAllowed": true }` or `{ "added": true }`, stay silent.
-8. ChatGPT pages: only the URLs in **In-app browser (ChatGPT)**. Never start
+9. ChatGPT pages: only the URLs in **In-app browser (ChatGPT)**. Never start
    from chatgpt.com and click through menus.
-9. **Doctor gate.** After `c2c doctor --json`, do not `goto` ChatGPT and do not
+10. **Doctor gate.** After `c2c doctor --json`, do not `goto` ChatGPT and do not
    send `[C2C]` until local is green — except the reconnect settings pages when
    `chatgptRepair.needed` is true. Not green:
    - `report.bridge.ok` is not true
@@ -144,11 +157,14 @@ that close the tab, hide the window, or stall on the settings page.
 6. **Batch.** Fill a known form in one Playwright / `js` script when you can.
    After an action, one cheap DOM check. Do not screenshot-poll.
 
-7. **One conversation, Chat mode.** The first ChatGPT chat is the C2C
-   conversation. Chat and Work (聊天 / 工作) are separate: a Work conversation
-   cannot become Chat. On every NEW conversation, if a Chat/Work switcher is
-   visible (often top-left), confirm **Chat** is selected before the boot
-   prompt. If it is Work, do not continue there — Switch to a new Chat
+7. **One conversation, Chat mode + model selection.** The first ChatGPT chat is
+   the C2C conversation. Chat and Work are separate: a Work conversation cannot
+   become Chat. On every NEW conversation, if a Chat/Work switcher is visible
+   (often top-left), confirm **Chat** is selected before the boot prompt.
+   Then read `c2c prefs --json`. If `chatgptModel` is non-null, open the model
+   picker and select the exact visible model label. Verify that the selected
+   label matches before sending the boot prompt. If unavailable, stop and ask
+   the user to choose another model or clear the preference. If it is Work, do not continue there — Switch to a new Chat
    conversation (HANDOFF). If no switcher is visible, do not hunt menus; continue.
    Send the boot prompt and the workspace_info check in that Chat conversation.
    Confirm the reply names the current workspace **before** saving or replacing
@@ -266,6 +282,9 @@ Speak only of 临时地址 / 固定域名 / 登录 Cloudflare.
    Authorize / pairing form is on screen: run `c2c pair --json` then type
    that code immediately. Doctor does not pre-mint a code.
 4. `c2c prefs --json` (this machine, not this workspace).
+   - `chatgptModel` is the optional preferred model for newly created chats.
+     If set, step 6 must select that exact visible model label before the boot
+     prompt. If null, keep ChatGPT's default.
    - If `setupMode` is null: tell the user exactly `setupChoicePrompt`. Wait
      for「1」or「2」. Then `c2c prefs set --setup-mode auto` or `--setup-mode manual`.
      Do not open ChatGPT settings and do not start automatic configuration
@@ -302,8 +321,9 @@ Speak only of 临时地址 / 固定域名 / 登录 Cloudflare.
      tools on this page.
 6. Same tab: open the first C2C chat per **Conversation management**
    (Project collection for a new workspace; `https://chatgpt.com/` only
-   in long-chat). Confirm Chat mode per **In-app browser** §7 (if it is Work,
-   open a new Chat conversation instead). Send the boot prompt from
+   in long-chat). Confirm Chat mode and apply the preferred model per
+   **In-app browser** §7. If the configured model is unavailable, do not send
+   the boot prompt. Send the boot prompt from
    `docs/protocol.md` §Boot Prompt, then (same chat) send:
    `Use the "<connectorName>" connector: call workspace_info and read hello-style top-level file. Reply with the workspace name.`
    Confirm the reply matches `workspaceName` (wait per **In-app browser** §8).
