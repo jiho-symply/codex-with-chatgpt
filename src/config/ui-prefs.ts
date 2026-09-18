@@ -109,12 +109,16 @@ export function mergeUiPrefs(patch: UiPrefsPatch): UiPrefsView {
       : patch.chatgptModel === null
         ? undefined
         : patch.chatgptModel.trim() || undefined;
+  const modelChanged =
+    patch.chatgptModel !== undefined && chatgptModel !== previous?.chatgptModel;
   const chatgptEffort =
-    patch.chatgptEffort === undefined
-      ? previous?.chatgptEffort
-      : patch.chatgptEffort === null
+    patch.chatgptEffort !== undefined
+      ? patch.chatgptEffort === null
         ? undefined
-        : patch.chatgptEffort.trim() || undefined;
+        : patch.chatgptEffort.trim() || undefined
+      : modelChanged || !chatgptModel
+        ? undefined
+        : previous?.chatgptEffort;
   const stored: StoredUiPrefs = {
     updatedAt: new Date().toISOString(),
   };
