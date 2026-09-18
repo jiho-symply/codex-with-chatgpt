@@ -17,6 +17,7 @@ export type PatchProposalErrorCode =
   | "INVALID_PATCH"
   | "UNSAFE_PATCH_PATH"
   | "TOO_MANY_FILES"
+  | "PROPOSAL_LIMIT"
   | "PROPOSAL_NOT_FOUND";
 
 export class PatchProposalError extends Error {
@@ -231,6 +232,7 @@ function classifyPatchRisk(paths: string[]): { risk: PatchProposalRisk; reasons:
 
   for (const target of paths) {
     const base = path.posix.basename(target);
+    const baseLower = base.toLowerCase();
     const lower = target.toLowerCase();
     if (
       lower.startsWith(".github/workflows/") ||
@@ -251,7 +253,11 @@ function classifyPatchRisk(paths: string[]): { risk: PatchProposalRisk; reasons:
     ) {
       reasons.add("build/container execution configuration");
     }
-    if (manifestNames.has(base) || /^requirements([-.].*)?\.txt$/i.test(base) || /^build\.gradle/i.test(base)) {
+    if (
+      [...manifestNames].some((name) => name.toLowerCase() === baseLower) ||
+      /^requirements([-.].*)?\.txt$/i.test(base) ||
+      /^build\.gradle/i.test(base)
+    ) {
       reasons.add("dependency/build manifest");
     }
     if (/\.(sh|bash|zsh|fish|ps1|bat|cmd)$/i.test(base)) {
@@ -402,6 +408,22 @@ export function savePatchProposal(workspace: Workspace, input: SavePatchProposal
     baseFiles: validated.baseFiles,
   };
 
+  const index = readIndex(workspace.id);
+  // Never evict an in-flight proposal. Reclaim terminal entries first; if the
+  // model has filled the entire bounded store with pending proposals, reject
+  // further submissions until Codex disposes of at least one.
+  while (index.items.length >= MAX_PATCH_PROPOSALS) {
+    const terminalIndex = index.items.findIndex((item) => item.status !== "pending");
+    if (terminalIndex < 0) {
+      throw new PatchProposalError(
+        "PROPOSAL_LIMIT",
+        `There are already ${MAX_PATCH_PROPOSALS} pending patch proposals for this workspace.`
+      );
+    }
+    const [dropped] = index.items.splice(terminalIndex, 1);
+    if (dropped) fs.rmSync(patchFile(workspace.id, dropped.id), { force: true });
+  }
+
   const file = patchFile(workspace.id, id);
   ensureDir(path.dirname(file));
   fs.writeFileSync(file, input.patch, { mode: 0o600, flag: "wx" });
@@ -411,12 +433,7 @@ export function savePatchProposal(workspace: Workspace, input: SavePatchProposal
     // best effort on platforms without chmod semantics
   }
 
-  const index = readIndex(workspace.id);
   index.items.push(meta);
-  while (index.items.length > MAX_PATCH_PROPOSALS) {
-    const dropped = index.items.shift();
-    if (dropped) fs.rmSync(patchFile(workspace.id, dropped.id), { force: true });
-  }
   writeIndex(workspace.id, index);
   return meta;
 }
