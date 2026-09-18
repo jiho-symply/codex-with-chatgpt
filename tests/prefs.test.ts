@@ -23,11 +23,12 @@ describe("ui prefs", () => {
     const prefs = readUiPrefs();
     expect(prefs.developerModeEnabled).toBe(false);
     expect(prefs.setupMode).toBeNull();
-    expect(prefs.remembered).toEqual({ developerMode: false, setupMode: false });
+    expect(prefs.chatgptModel).toBeNull();
+    expect(prefs.remembered).toEqual({ developerMode: false, setupMode: false, chatgptModel: false });
     expect(prefs.setupChoicePrompt).toBe(SETUP_CHOICE_PROMPT);
-    expect(prefs.setupChoicePrompt).toContain("AI 自动化配置（预览版）");
-    expect(prefs.setupChoicePrompt).toContain("手动教学配置");
-    expect(prefs.setupChoicePrompt).toContain("请回复「1」或「2」");
+    expect(prefs.setupChoicePrompt).toContain("AI 자동 설정(프리뷰)");
+    expect(prefs.setupChoicePrompt).toContain("수동 안내 설정");
+    expect(prefs.setupChoicePrompt).toContain("「1」 또는 「2」");
   });
 
   it("remembers developer mode as on only, never as off", () => {
@@ -48,6 +49,20 @@ describe("ui prefs", () => {
     const auto = mergeUiPrefs({ setupMode: "auto" });
     expect(auto.setupMode).toBe("auto");
     expect(auto.developerModeEnabled).toBe(true);
+  });
+
+  it("persists and clears the preferred ChatGPT model", () => {
+    dirs.push(isolateStateDir());
+    const saved = mergeUiPrefs({ chatgptModel: "GPT-5.6 Sol" });
+    expect(saved.chatgptModel).toBe("GPT-5.6 Sol");
+    expect(saved.remembered.chatgptModel).toBe(true);
+
+    const preserved = mergeUiPrefs({ setupMode: "manual" });
+    expect(preserved.chatgptModel).toBe("GPT-5.6 Sol");
+
+    const cleared = mergeUiPrefs({ chatgptModel: null });
+    expect(cleared.chatgptModel).toBeNull();
+    expect(cleared.remembered.chatgptModel).toBe(false);
   });
 
   it("rejects an unknown setup mode", () => {
