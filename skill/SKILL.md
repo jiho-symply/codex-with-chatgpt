@@ -24,6 +24,12 @@ Control messages stay bounded (< 4 KiB) and never carry file/diff/log/patch bodi
 
 1. NEVER paste file contents, diffs, logs, or patch bodies into ChatGPT. ChatGPT reads
    workspace data through MCP and submits code only through `submit_patch`.
+   Every C2C control message and every C2C control reply must be <= 4096 UTF-8
+   bytes. Before sending, measure with `new TextEncoder().encode(message).length`
+   (or an equivalent byte-length check) and compact if needed. Before acting on
+   a reply, perform the same check. If it exceeds 4096 bytes, do not execute or
+   apply anything from that reply; ask ChatGPT for a compact C2C restatement.
+   Never truncate structured identifiers such as TASK_ID / PROPOSAL_ID.
 2. NEVER show the user technical internals (MCP, OAuth, PKCE, tunnel, ports, localhost).
    Speak in terms of "ChatGPT 연결 / 보안 연결 / 페어링". The only exception is the
    **guided manual ChatGPT setup** below: expose only the exact settings
