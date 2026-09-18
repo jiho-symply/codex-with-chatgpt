@@ -25,8 +25,10 @@ export const SETUP_CHOICE_PROMPT = [
 interface StoredUiPrefs {
   developerModeEnabled?: boolean;
   setupMode?: SetupMode;
-  /** Exact visible model label to select in ChatGPT. Missing = keep ChatGPT default. */
+  /** Exact model-family label discovered from the signed-in ChatGPT web UI. */
   chatgptModel?: string;
+  /** Exact reasoning/effort label available for the selected model. */
+  chatgptEffort?: string;
   updatedAt: string;
 }
 
@@ -34,11 +36,13 @@ export interface UiPrefsView {
   developerModeEnabled: boolean;
   setupMode: SetupMode | null;
   chatgptModel: string | null;
+  chatgptEffort: string | null;
   setupChoicePrompt: string;
   remembered: {
     developerMode: boolean;
     setupMode: boolean;
     chatgptModel: boolean;
+    chatgptEffort: boolean;
   };
 }
 
@@ -52,10 +56,13 @@ function readStored(): StoredUiPrefs | null {
   const setupMode = raw.setupMode === "auto" || raw.setupMode === "manual" ? raw.setupMode : undefined;
   const chatgptModel =
     typeof raw.chatgptModel === "string" && raw.chatgptModel.trim() ? raw.chatgptModel.trim() : undefined;
+  const chatgptEffort =
+    typeof raw.chatgptEffort === "string" && raw.chatgptEffort.trim() ? raw.chatgptEffort.trim() : undefined;
   return {
     developerModeEnabled: raw.developerModeEnabled === true,
     setupMode,
     chatgptModel,
+    chatgptEffort,
     updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : new Date().toISOString(),
   };
 }
@@ -65,15 +72,18 @@ export function readUiPrefs(): UiPrefsView {
   const developerModeEnabled = stored?.developerModeEnabled === true;
   const setupMode = stored?.setupMode ?? null;
   const chatgptModel = stored?.chatgptModel ?? null;
+  const chatgptEffort = stored?.chatgptEffort ?? null;
   return {
     developerModeEnabled,
     setupMode,
     chatgptModel,
+    chatgptEffort,
     setupChoicePrompt: SETUP_CHOICE_PROMPT,
     remembered: {
       developerMode: developerModeEnabled,
       setupMode: setupMode !== null,
       chatgptModel: chatgptModel !== null,
+      chatgptEffort: chatgptEffort !== null,
     },
   };
 }
@@ -81,8 +91,10 @@ export function readUiPrefs(): UiPrefsView {
 export interface UiPrefsPatch {
   developerModeEnabled?: true;
   setupMode?: SetupMode;
-  /** null clears the preference and restores ChatGPT's default model behavior. */
+  /** null clears the model preference and restores ChatGPT's default behavior. */
   chatgptModel?: string | null;
+  /** null clears the saved reasoning/effort preference. */
+  chatgptEffort?: string | null;
 }
 
 export function mergeUiPrefs(patch: UiPrefsPatch): UiPrefsView {
@@ -97,6 +109,12 @@ export function mergeUiPrefs(patch: UiPrefsPatch): UiPrefsView {
       : patch.chatgptModel === null
         ? undefined
         : patch.chatgptModel.trim() || undefined;
+  const chatgptEffort =
+    patch.chatgptEffort === undefined
+      ? previous?.chatgptEffort
+      : patch.chatgptEffort === null
+        ? undefined
+        : patch.chatgptEffort.trim() || undefined;
   const stored: StoredUiPrefs = {
     updatedAt: new Date().toISOString(),
   };
@@ -107,6 +125,7 @@ export function mergeUiPrefs(patch: UiPrefsPatch): UiPrefsView {
   }
   if (setupMode) stored.setupMode = setupMode;
   if (chatgptModel) stored.chatgptModel = chatgptModel;
+  if (chatgptEffort) stored.chatgptEffort = chatgptEffort;
   writeSecureJson(prefsFile(), stored);
   return readUiPrefs();
 }
