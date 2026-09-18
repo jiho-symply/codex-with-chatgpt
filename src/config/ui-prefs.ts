@@ -25,16 +25,20 @@ export const SETUP_CHOICE_PROMPT = [
 interface StoredUiPrefs {
   developerModeEnabled?: boolean;
   setupMode?: SetupMode;
+  /** Exact visible model label to select in ChatGPT. Missing = keep ChatGPT default. */
+  chatgptModel?: string;
   updatedAt: string;
 }
 
 export interface UiPrefsView {
   developerModeEnabled: boolean;
   setupMode: SetupMode | null;
+  chatgptModel: string | null;
   setupChoicePrompt: string;
   remembered: {
     developerMode: boolean;
     setupMode: boolean;
+    chatgptModel: boolean;
   };
 }
 
@@ -46,9 +50,12 @@ function readStored(): StoredUiPrefs | null {
   const raw = readJsonIfExists<StoredUiPrefs>(prefsFile());
   if (!raw || typeof raw !== "object") return null;
   const setupMode = raw.setupMode === "auto" || raw.setupMode === "manual" ? raw.setupMode : undefined;
+  const chatgptModel =
+    typeof raw.chatgptModel === "string" && raw.chatgptModel.trim() ? raw.chatgptModel.trim() : undefined;
   return {
     developerModeEnabled: raw.developerModeEnabled === true,
     setupMode,
+    chatgptModel,
     updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : new Date().toISOString(),
   };
 }
@@ -57,13 +64,16 @@ export function readUiPrefs(): UiPrefsView {
   const stored = readStored();
   const developerModeEnabled = stored?.developerModeEnabled === true;
   const setupMode = stored?.setupMode ?? null;
+  const chatgptModel = stored?.chatgptModel ?? null;
   return {
     developerModeEnabled,
     setupMode,
+    chatgptModel,
     setupChoicePrompt: SETUP_CHOICE_PROMPT,
     remembered: {
       developerMode: developerModeEnabled,
       setupMode: setupMode !== null,
+      chatgptModel: chatgptModel !== null,
     },
   };
 }
@@ -71,6 +81,8 @@ export function readUiPrefs(): UiPrefsView {
 export interface UiPrefsPatch {
   developerModeEnabled?: true;
   setupMode?: SetupMode;
+  /** null clears the preference and restores ChatGPT's default model behavior. */
+  chatgptModel?: string | null;
 }
 
 export function mergeUiPrefs(patch: UiPrefsPatch): UiPrefsView {
@@ -79,6 +91,12 @@ export function mergeUiPrefs(patch: UiPrefsPatch): UiPrefsView {
   }
   const previous = readStored();
   const setupMode = patch.setupMode ?? previous?.setupMode;
+  const chatgptModel =
+    patch.chatgptModel === undefined
+      ? previous?.chatgptModel
+      : patch.chatgptModel === null
+        ? undefined
+        : patch.chatgptModel.trim() || undefined;
   const stored: StoredUiPrefs = {
     updatedAt: new Date().toISOString(),
   };
@@ -88,6 +106,7 @@ export function mergeUiPrefs(patch: UiPrefsPatch): UiPrefsView {
     stored.developerModeEnabled = true;
   }
   if (setupMode) stored.setupMode = setupMode;
+  if (chatgptModel) stored.chatgptModel = chatgptModel;
   writeSecureJson(prefsFile(), stored);
   return readUiPrefs();
 }
