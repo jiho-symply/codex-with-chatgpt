@@ -30,7 +30,7 @@
 | Log credential leakage | Logger redacts token prefixes, bearer headers, token-like parameters, and pairing-code-shaped strings before writing |
 | Execution output leak | Codex may nominate test/build/lint logs; a local sanitizer redacts tokens, pairing-code-shaped strings and home paths, truncates size, and refuses private-key blocks entirely. Restricted items are listed without a body. ChatGPT still cannot run commands. |
 | Checkpoint / resume dump | Session checkpoints store short protocol fields only (capped), including at most a proposal id. Resume uses the existing chat or HANDOFF — no log/patch paste and no blind re-application. |
-| Malicious or prompt-injected patch | ChatGPT cannot apply a patch. `submit_patch` has its own `proposal.write` scope and writes only to the 0700/0600 C2C state directory. The bridge rejects oversized, binary, traversal, symlink, sensitive/noise path, C2C/Git-control-file, rename/copy, permission-mode and submodule patches. File deletions are allowed only as approval-required proposals. |
+| Malicious or prompt-injected patch | ChatGPT cannot apply a patch. `submit_patch` requires both the dedicated `proposal.write` OAuth scope **and** a short-lived local authorization for the exact active coding TASK_ID. Plan/review tasks never receive that local capability. The tool writes only to the 0700/0600 C2C state directory. The bridge rejects oversized, binary, traversal, symlink, sensitive/noise path, C2C/Git-control-file, rename/copy, permission-mode and submodule patches. File deletions are allowed only as approval-required proposals. |
 | Time-of-check/time-of-use patch race | Every target file is fingerprinted (existence, size, SHA-256) at proposal time. `c2c proposal inspect` reports stale targets; Codex refuses stale proposals and also runs `git apply --check` before applying. |
 | Patch-triggered command execution / destructive change | Approval-required targets include dependency/build manifests, CI/CD, container/task config, shell/PowerShell scripts, and file deletions. The Skill requires explicit user approval before applying them. Codex locally inspects every accepted patch before running tests/builds. |
 | Proposal tampering | Patch bodies are stored owner-only outside the repository with SHA-256 + byte length in metadata; inspection fails if either changes. Proposal ids are random and task/iteration binding is checked before use. |
@@ -42,7 +42,10 @@ Scopes: `workspace.read`, `workspace.search`, `git.read`, `execution.read`,
 (`INSUFFICIENT_SCOPE`). `proposal.write` does **not** grant repository write
 access; it only permits bounded proposals in the isolated C2C state store.
 Existing connectors authorized before this scope existed may need one
-re-authorization before coding-subagent mode can submit a proposal.
+re-authorization before coding-subagent mode can submit a proposal. Even after
+that, patch submission is disabled until Codex locally authorizes the explicit
+coding task id; the authorization defaults to 4 hours, is bounded to 4 active
+tasks per workspace, and is revoked on terminal workflow states.
 Access tokens: 1 hour. Refresh tokens: 30 days, rotated. All tokens bound to
 `workspace_id` and `client_id`.
 
