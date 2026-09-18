@@ -668,8 +668,15 @@ Choose once from the user's wording; do not ask if the intent is clear.
      `capabilities.proposalWriteAuthorized=true`. If it remains false, do not
      weaken the scope check; fall back to `plan` mode and explain that patch
      submission was not authorized.
-4. Generate task id `c2c_` + 4 random hex chars unless an active checkpoint
+4. Generate task id `c2c_` + 12 random hex chars unless an active checkpoint
    already has one.
+5. For `code` or `auto`, grant a **temporary local authorization only for
+   this task id**:
+   `c2c proposal authorize -w <ws> --task <id> --ttl-minutes 240 --json`.
+   This does not change OAuth scopes or repository permissions; it is a second,
+   local gate that expires automatically. If resuming an existing code/auto
+   checkpoint, renew that exact task id instead of creating another one.
+   Never authorize proposal submission for plan/review mode.
 
 ### 1. Open/resume the C2C conversation
 
@@ -679,6 +686,9 @@ workspace_info check before saving the URL.
 
 **Resume from checkpoint before sending INIT:**
 
+- First read `checkpoint.taskMode`. If it is `code` or `auto`, renew the
+  exact checkpoint task id with `c2c proposal authorize ...` before continuing.
+  If it is `plan` or `review`, ensure no new proposal authorization is created.
 - `EXECUTED_SENT` + `GPT_REVIEW`: wait for the existing review.
 - `EXECUTED_LOCAL`: send only EXECUTED; do not rerun work.
 - `PATCH_RECEIVED`: use its `proposalId` and continue **Secure proposal
@@ -724,10 +734,14 @@ Never paste a patch into chat. If patching is unsafe/inappropriate, reply PLAN
 or BLOCKED instead.
 ```
 
-After the message is visibly sent:
+After the message is visibly sent, persist the chosen mode in the checkpoint:
 
-- `plan` → checkpoint `INIT --waiting-for GPT_PLAN`.
-- `code`/`auto`/`review` → checkpoint `INIT --waiting-for GPT_ACTION`.
+- `plan` → `c2c session set ... --protocol-state INIT --waiting-for GPT_PLAN --task-mode plan`.
+- `code` → `... --waiting-for GPT_ACTION --task-mode code`.
+- `auto` → `... --waiting-for GPT_ACTION --task-mode auto`.
+- `review` → `... --waiting-for GPT_ACTION --task-mode review`.
+
+Never infer a different task mode after resume; use the saved `checkpoint.taskMode`.
 
 ### 3A. PLAN path
 
@@ -757,7 +771,8 @@ SUMMARY:
 On PATCH:
 
 1. Require the same `TASK_ID`; checkpoint immediately:
-   `c2c session set -w <ws> --iteration <n> --state PATCH --protocol-state PATCH_RECEIVED --waiting-for none --proposal-id "<id>" --next-step "validate patch proposal"`.
+   `c2c session set -w <ws> --iteration <n> --state PATCH --protocol-state PATCH_RECEIVED --waiting-for none --task-mode <code|auto> --proposal-id "<id>" --next-step "validate patch proposal"`.
+   Reject PATCH outright if the saved task mode is not `code` or `auto`.
 2. Run `c2c proposal inspect -w <ws> <id> --json`.
 3. Require all of:
    - proposal id matches;
@@ -807,7 +822,7 @@ Re-read current files through MCP and submit a fresh proposal, or reply PLAN/BLO
 ```
 
 After sending PATCH_REJECTED, checkpoint `INIT --waiting-for GPT_ACTION` with
-the same task id/iteration and wait. Never apply the rejected id later.
+the same task id/iteration/mode and wait. Never apply the rejected id later.
 
 ### 4. Test and record
 
@@ -853,10 +868,12 @@ Omit PROPOSAL_ID for Codex-authored PLAN execution. Then checkpoint
 
 ChatGPT reviews via MCP and may reply:
 
-- `DONE` → summarize and clear checkpoint;
-- `PLAN` → follow 3A;
-- `PATCH` → follow 3B (a review fix may be a new proposal);
-- `BLOCKED` → checkpoint BLOCKED / USER and surface the decision.
+- `DONE` → for code/auto, run `c2c proposal revoke -w <ws> --task <id> --json`;
+  then summarize and clear checkpoint.
+- `PLAN` → follow 3A.
+- `PATCH` → follow 3B only when the saved task mode is code/auto.
+- `BLOCKED` → for code/auto, revoke the temporary task authorization, then
+  checkpoint BLOCKED / USER and surface the decision.
 
 Loop up to `maxIterations` (default 12). At the limit, ask the user whether to
 continue. A proposal submission does not bypass the iteration limit.
