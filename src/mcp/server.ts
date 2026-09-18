@@ -11,6 +11,7 @@ import {
   PatchProposalError,
   savePatchProposal,
 } from "../proposal/store.js";
+import { isProposalTaskAuthorized } from "../proposal/authorization.js";
 import type { Logger } from "../logger/index.js";
 import { PRODUCT_NAME, VERSION } from "../version.js";
 
@@ -518,6 +519,12 @@ export function createMcpServer(ctx: McpContext): McpServer {
     async (args, extra) => {
       const denied = requireScope(extra.authInfo, "proposal.write");
       if (denied) return denied;
+      if (!isProposalTaskAuthorized(workspace.id, args.task_id)) {
+        return fail(
+          "PROPOSAL_NOT_AUTHORIZED",
+          "Patch proposals are not locally authorized for this task id. Codex must explicitly authorize the active coding-subagent task."
+        );
+      }
       try {
         const meta = savePatchProposal(workspace, {
           taskId: args.task_id,
