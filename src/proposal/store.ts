@@ -10,6 +10,7 @@ export const MAX_PATCH_PROPOSALS = 20;
 const MAX_TARGET_BYTES = 16 * 1024 * 1024;
 
 export type PatchProposalStatus = "pending" | "applied" | "rejected" | "failed";
+export type PatchProposalRisk = "normal" | "execution-sensitive";
 
 export type PatchProposalErrorCode =
   | "PATCH_TOO_LARGE"
@@ -47,6 +48,8 @@ export interface PatchProposalMeta {
   sha256: string;
   fileCount: number;
   paths: string[];
+  risk: PatchProposalRisk;
+  riskReasons: string[];
   baseFiles: TargetFingerprint[];
 }
 
@@ -199,6 +202,69 @@ function validateSection(section: string[], target: string): void {
   }
 }
 
+function classifyPatchRisk(paths: string[]): { risk: PatchProposalRisk; reasons: string[] } {
+  const reasons = new Set<string>();
+  const manifestNames = new Set([
+    "package.json",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "bun.lock",
+    "bun.lockb",
+    "pyproject.toml",
+    "setup.py",
+    "setup.cfg",
+    "poetry.lock",
+    "Pipfile",
+    "Pipfile.lock",
+    "Cargo.toml",
+    "Cargo.lock",
+    "go.mod",
+    "go.sum",
+    "pom.xml",
+    "composer.json",
+    "composer.lock",
+    "Gemfile",
+    "Gemfile.lock",
+    "Makefile",
+  ]);
+
+  for (const target of paths) {
+    const base = path.posix.basename(target);
+    const lower = target.toLowerCase();
+    if (
+      lower.startsWith(".github/workflows/") ||
+      lower.startsWith(".circleci/") ||
+      lower === ".gitlab-ci.yml" ||
+      lower === "jenkinsfile" ||
+      lower.startsWith("azure-pipelines")
+    ) {
+      reasons.add("CI/CD configuration");
+    }
+    if (
+      lower.startsWith(".devcontainer/") ||
+      lower === ".vscode/tasks.json" ||
+      lower === "dockerfile" ||
+      lower.endsWith("/dockerfile") ||
+      lower.startsWith("docker-compose.") ||
+      lower.includes("/docker-compose.")
+    ) {
+      reasons.add("build/container execution configuration");
+    }
+    if (manifestNames.has(base) || /^requirements([-.].*)?\.txt$/i.test(base) || /^build\.gradle/i.test(base)) {
+      reasons.add("dependency/build manifest");
+    }
+    if (/\.(sh|bash|zsh|fish|ps1|bat|cmd)$/i.test(base)) {
+      reasons.add("executable script");
+    }
+  }
+
+  return {
+    risk: reasons.size > 0 ? "execution-sensitive" : "normal",
+    reasons: [...reasons],
+  };
+}
+
 function targetFingerprint(workspace: Workspace, requested: string): TargetFingerprint {
   let resolved: { abs: string; rel: string };
   try {
@@ -318,6 +384,7 @@ export function savePatchProposal(workspace: Workspace, input: SavePatchProposal
   if (summary && utf8Bytes(summary) > 4096) {
     throw new PatchProposalError("INVALID_PATCH", "summary exceeds 4096 UTF-8 bytes.");
   }
+  const risk = classifyPatchRisk(validated.paths);
   const meta: PatchProposalMeta = {
     id,
     taskId,
@@ -330,6 +397,8 @@ export function savePatchProposal(workspace: Workspace, input: SavePatchProposal
     sha256: validated.sha256,
     fileCount: validated.paths.length,
     paths: validated.paths,
+    risk: risk.risk,
+    riskReasons: risk.reasons,
     baseFiles: validated.baseFiles,
   };
 
