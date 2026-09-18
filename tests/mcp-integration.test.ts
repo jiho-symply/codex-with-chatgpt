@@ -119,7 +119,7 @@ describe("MCP tools over Streamable HTTP", () => {
     expectToolOutputSchema(tools, "test_status", ["available", "tests", "outputAvailable", "outputId"]);
     expectToolOutputSchema(tools, "execution_summary", ["records"]);
     expectToolOutputSchema(tools, "execution_output", ["action", "items", "text"]);
-    expectToolOutputSchema(tools, "submit_patch", ["proposalId", "taskId", "status", "sha256", "paths"]);
+    expectToolOutputSchema(tools, "submit_patch", ["proposalId", "taskId", "status", "sha256", "paths", "risk", "riskReasons"]);
   });
 
   it("documents git_diff pagination with its output field names", async () => {
@@ -226,11 +226,13 @@ describe("MCP tools over Streamable HTTP", () => {
       status: string;
       paths: string[];
       sha256: string;
+      risk: string;
     }>(result);
     expect(proposal.proposalId).toMatch(/^p_[a-f0-9]{16}$/);
     expect(proposal.status).toBe("pending");
     expect(proposal.paths).toEqual(["src/index.ts"]);
     expect(proposal.sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(proposal.risk).toBe("normal");
     expect(fs.readFileSync(path.join(root, "src/index.ts"), "utf8")).toBe(before);
     expect(listPatchProposals(bridge.workspace.id).some((item) => item.id === proposal.proposalId)).toBe(true);
   });
