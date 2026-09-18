@@ -197,7 +197,29 @@ describe("patch proposal store", () => {
     );
     expect(() =>
       savePatchProposal(workspace, { taskId: "c2c_test", iteration: 1, patch: mode })
-    ).toThrow(/permission|submodule|rename/i);
+    ).toThrow(/permission|executable|submodule|rename/i);
+
+    const executable = modifyPatch().replace(
+      "index 1111111..2222222 100644",
+      "index 1111111..2222222 100755"
+    );
+    expect(() =>
+      savePatchProposal(workspace, { taskId: "c2c_test", iteration: 1, patch: executable })
+    ).toThrow(/executable|mode/i);
+
+    const symlink = [
+      "diff --git a/src/link.ts b/src/link.ts",
+      "new file mode 120000",
+      "index 0000000..1111111",
+      "--- /dev/null",
+      "+++ b/src/link.ts",
+      "@@ -0,0 +1 @@",
+      "+../../outside",
+      "",
+    ].join("\n");
+    expect(() =>
+      savePatchProposal(workspace, { taskId: "c2c_test", iteration: 1, patch: symlink })
+    ).toThrow(/symlink|mode/i);
 
     const control = modifyPatch() + "\u001b[31m";
     expect(() =>
