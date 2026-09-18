@@ -69,6 +69,10 @@ describe("ui prefs", () => {
     expect(preserved.chatgptModel).toBe("GPT-5.6 Sol");
     expect(preserved.chatgptEffort).toBe("High");
 
+    const changedModel = mergeUiPrefs({ chatgptModel: "GPT-6 Pro" });
+    expect(changedModel.chatgptModel).toBe("GPT-6 Pro");
+    expect(changedModel.chatgptEffort).toBeNull();
+
     const cleared = mergeUiPrefs({ chatgptModel: null, chatgptEffort: null });
     expect(cleared.chatgptModel).toBeNull();
     expect(cleared.chatgptEffort).toBeNull();
