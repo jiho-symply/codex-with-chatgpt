@@ -59,6 +59,8 @@ describe("patch proposal store", () => {
     expect(meta.status).toBe("pending");
     expect(meta.paths).toEqual(["src/app.ts"]);
     expect(meta.fileCount).toBe(1);
+    expect(meta.risk).toBe("normal");
+    expect(meta.riskReasons).toEqual([]);
     expect(fs.readFileSync(path.join(root, "src/app.ts"), "utf8")).toBe(before);
     expect(listPatchProposals(workspace.id)).toHaveLength(1);
 
@@ -94,6 +96,17 @@ describe("patch proposal store", () => {
     const marked = markPatchProposal(workspace.id, meta.id, "applied");
     expect(marked.status).toBe("applied");
     expect(fs.readFileSync(path.join(root, "src/app.ts"), "utf8")).toBe(before);
+  });
+
+  it("flags execution-sensitive configuration for explicit approval", () => {
+    const { workspace } = setup();
+    const meta = savePatchProposal(workspace, {
+      taskId: "c2c_risk",
+      iteration: 1,
+      patch: modifyPatch("package.json"),
+    });
+    expect(meta.risk).toBe("execution-sensitive");
+    expect(meta.riskReasons).toContain("dependency/build manifest");
   });
 
   it("rejects sensitive and C2C control paths", () => {
