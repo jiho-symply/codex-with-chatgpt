@@ -7,6 +7,7 @@ import { startBridge, type Bridge } from "../src/bridge/server.js";
 import { appendExecutionRecord } from "../src/execution/records.js";
 import { saveExecutionOutput } from "../src/execution/output.js";
 import { listPatchProposals } from "../src/proposal/store.js";
+import { authorizeProposalTask } from "../src/proposal/authorization.js";
 import { makeTmpDir, cleanup, write, makeGitRepo, git, isolateStateDir } from "./helpers.js";
 
 let root: string;
@@ -220,6 +221,7 @@ describe("MCP tools over Streamable HTTP", () => {
 
   it("submit_patch stores an isolated proposal without changing the workspace", async () => {
     const before = fs.readFileSync(path.join(root, "src/index.ts"), "utf8");
+    authorizeProposalTask(bridge.workspace.id, "c2c_patch", 30);
     const result = await client.callTool({
       name: "submit_patch",
       arguments: {
@@ -246,6 +248,19 @@ describe("MCP tools over Streamable HTTP", () => {
     expect(proposal.risk).toBe("normal");
     expect(fs.readFileSync(path.join(root, "src/index.ts"), "utf8")).toBe(before);
     expect(listPatchProposals(bridge.workspace.id).some((item) => item.id === proposal.proposalId)).toBe(true);
+  });
+
+  it("submit_patch requires local authorization for the explicit coding task", async () => {
+    const result = await client.callTool({
+      name: "submit_patch",
+      arguments: {
+        task_id: "c2c_not_authorized",
+        iteration: 1,
+        patch: proposalPatch(),
+      },
+    });
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("PROPOSAL_NOT_AUTHORIZED");
   });
 
   it("submit_patch requires the dedicated proposal.write scope", async () => {
