@@ -131,12 +131,14 @@ describe("mergeSession", () => {
         checkpoint: {
           protocolState: "PATCH_RECEIVED",
           waitingFor: "none",
+          taskMode: "code",
           proposalId: "p_0123456789abcdef",
           nextExpectedStep: "inspect and validate patch proposal",
         },
       }
     );
     expect(next.checkpoint?.protocolState).toBe("PATCH_RECEIVED");
+    expect(next.checkpoint?.taskMode).toBe("code");
     expect(next.checkpoint?.proposalId).toBe("p_0123456789abcdef");
   });
 
