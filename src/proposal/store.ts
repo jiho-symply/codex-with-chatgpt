@@ -122,7 +122,9 @@ function normalizePatchPath(raw: string): string {
     normalized === ".git" ||
     normalized.startsWith(".git/") ||
     normalized === ".c2cignore" ||
-    normalized === ".c2c.json"
+    normalized === ".c2c.json" ||
+    normalized === ".gitattributes" ||
+    normalized === ".gitmodules"
   ) {
     throw new PatchProposalError(
       "UNSAFE_PATCH_PATH",
@@ -245,6 +247,11 @@ function classifyPatchRisk(paths: string[]): { risk: PatchProposalRisk; reasons:
     }
     if (
       lower.startsWith(".devcontainer/") ||
+      lower === ".pre-commit-config.yaml" ||
+      lower === "tox.ini" ||
+      lower === "noxfile.py" ||
+      lower === "conftest.py" ||
+      /(^|\/)(jest|vitest|vite|webpack)\.config\./.test(lower) ||
       lower === ".vscode/tasks.json" ||
       lower === "dockerfile" ||
       lower.endsWith("/dockerfile") ||
@@ -272,6 +279,13 @@ function classifyPatchRisk(paths: string[]): { risk: PatchProposalRisk; reasons:
 }
 
 function targetFingerprint(workspace: Workspace, requested: string): TargetFingerprint {
+  if (workspace.ignoreRules.isNoise(requested) || workspace.ignoreRules.isNoise(requested + "/")) {
+    throw new PatchProposalError(
+      "UNSAFE_PATCH_PATH",
+      `Generated/build/cache/noise paths cannot be modified through patch proposals: ${requested}`
+    );
+  }
+
   let resolved: { abs: string; rel: string };
   try {
     resolved = workspace.resolve(requested);
