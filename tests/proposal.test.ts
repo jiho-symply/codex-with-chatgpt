@@ -227,6 +227,44 @@ describe("patch proposal store", () => {
     ).toThrow(/control/i);
   });
 
+  it("allows only one pending proposal per task iteration", () => {
+    const { workspace } = setup();
+    const first = savePatchProposal(workspace, {
+      taskId: "c2c_once",
+      iteration: 3,
+      patch: modifyPatch(),
+    });
+
+    expect(() =>
+      savePatchProposal(workspace, {
+        taskId: "c2c_once",
+        iteration: 3,
+        patch: modifyPatch(),
+      })
+    ).toThrow(/pending proposal already exists/i);
+
+    markPatchProposal(workspace.id, first.id, "rejected");
+    expect(() =>
+      savePatchProposal(workspace, {
+        taskId: "c2c_once",
+        iteration: 3,
+        patch: modifyPatch(),
+      })
+    ).not.toThrow();
+  });
+
+  it("does not allow a terminal proposal status to be rewritten", () => {
+    const { workspace } = setup();
+    const meta = savePatchProposal(workspace, {
+      taskId: "c2c_terminal",
+      iteration: 1,
+      patch: modifyPatch(),
+    });
+    markPatchProposal(workspace.id, meta.id, "rejected");
+    expect(() => markPatchProposal(workspace.id, meta.id, "applied")).toThrow(/already terminal/i);
+    expect(() => markPatchProposal(workspace.id, meta.id, "rejected")).not.toThrow();
+  });
+
   it("never evicts pending proposals when the bounded store is full", () => {
     const { workspace } = setup();
     const proposals = Array.from({ length: 20 }, (_, i) =>
