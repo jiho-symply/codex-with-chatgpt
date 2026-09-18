@@ -1,21 +1,27 @@
 # C2C Agent Protocol
 
-Control plane: Computer Use (tiny structured messages typed into the ChatGPT UI).
-Data plane: MCP (ChatGPT pulls files, diffs, search results itself).
+Control plane: the ChatGPT web UI (small structured C2C state messages).
+Data plane: MCP (ChatGPT pulls files/diffs/results and submits isolated patch proposals).
 
-Never mix the two: control messages carry state, never content.
+Never mix the two: control messages carry state and bounded rationale, never file
+bodies, diffs, patch bodies, or logs. Patch content travels only through the
+bounded `submit_patch` MCP tool and the local proposal store.
 
 ## States
 
 ```
-INIT → PLAN → EXECUTING → EXECUTED → REVIEW → PLAN | DONE | BLOCKED | ERROR
+plan: INIT → PLAN → EXECUTING → EXECUTED → REVIEW → PLAN | PATCH | DONE | BLOCKED
+code: INIT → PATCH → EXECUTING → EXECUTED → REVIEW → PATCH | PLAN | DONE | BLOCKED
+                    ↘ PATCH_REJECTED → PATCH | PLAN | BLOCKED
 ```
 
 | State | Sender | Meaning |
 | --- | --- | --- |
 | INIT | Codex | New task; asks ChatGPT to inspect + plan |
-| PLAN | ChatGPT | Executable plan for the next iteration |
-| EXECUTING | Codex | (optional) execution in progress |
+| PLAN | ChatGPT | Executable natural-language plan for the next iteration |
+| PATCH | ChatGPT | A validated proposal was submitted through `submit_patch`; message carries only its id/metadata |
+| PATCH_REJECTED | Codex | Proposal was not applied (stale, risk approval denied, or local validation failed) |
+| EXECUTING | Codex | (optional) execution or patch application in progress |
 | EXECUTED | Codex | Iteration finished; metadata only |
 | REVIEW | ChatGPT | (implicit) ChatGPT is inspecting via MCP |
 | DONE | ChatGPT | Success criteria met |
@@ -35,7 +41,8 @@ Local checkpoint values (session only):
 | --- | --- |
 | `INIT` | INIT sent; waiting for PLAN |
 | `PLAN_RECEIVED` | PLAN in hand; not finished executing |
-| `EXECUTING` | Codex is applying the current PLAN |
+| `PATCH_RECEIVED` | PATCH id checkpointed; proposal not yet applied |
+| `EXECUTING` | Codex is applying the current PLAN or accepted PATCH |
 | `EXECUTED_LOCAL` | Recorded locally; EXECUTED not yet typed |
 | `EXECUTED_SENT` | EXECUTED typed; waiting for review |
 | `DONE` / `BLOCKED` | Terminal; DONE should `--clear-checkpoint` |
@@ -49,7 +56,9 @@ just to resume.
 ## Message format
 
 Every control message starts with `[C2C]` and key-value headers, then sections.
-Keep messages < 1 KB. No diffs, no logs, no file bodies.
+Keep each control message below **4 KiB UTF-8**. The higher limit is for useful
+rationale, rejection reasons, and handoffs—not code transport. No diffs, patch
+bodies, logs, or file bodies are allowed in the control plane.
 
 ### INIT (Codex → ChatGPT)
 
@@ -58,6 +67,7 @@ Keep messages < 1 KB. No diffs, no logs, no file bodies.
 STATE: INIT
 TASK_ID: c2c_f81a
 ITERATION: 0
+MODE: plan
 
 GOAL:
 Implement dark mode.
@@ -98,6 +108,67 @@ SUCCESS_CRITERIA:
 
 Plans must be finite, concrete, executable. Not 40-step epics.
 
+### Coding-subagent mode and PATCH
+
+`MODE` on INIT is one of:
+
+- `plan` — preserve the classic C2C behavior: ChatGPT plans/reviews, Codex writes.
+- `code` — ChatGPT may write the implementation as an isolated patch proposal.
+- `auto` — ChatGPT may choose PLAN or PATCH based on task size/risk.
+- `review` — inspect existing changes; do not submit a patch unless explicitly asked.
+
+In `code` mode ChatGPT reads current files through MCP, creates a standard
+text-only unified diff, calls `submit_patch`, and then sends only:
+
+```
+[C2C]
+STATE: PATCH
+TASK_ID: c2c_f81a
+ITERATION: 1
+
+PROPOSAL_ID: p_0123456789abcdef
+FILES: 3
+RISK: normal
+
+SUMMARY:
+Implement theme persistence and the toggle.
+```
+
+The diff itself must never be pasted into this message.
+
+On receiving PATCH, Codex MUST:
+
+1. checkpoint `PATCH_RECEIVED` with `proposalId` before doing anything else;
+2. run `c2c proposal inspect -w <workspace> <id> --json`;
+3. require matching task id/iteration, `status=pending`, intact SHA-256, and
+   `stale=false`;
+4. if `risk=execution-sensitive`, show the affected paths/reasons and obtain
+   explicit user approval before applying;
+5. run `git apply --check "<patchPath>"` without `--unsafe-paths`;
+6. inspect the proposed diff locally before any test/build command;
+7. only then run `git apply "<patchPath>"`; never use an auto-apply tool exposed
+   to ChatGPT;
+8. immediately mark the proposal `applied` (or `failed/rejected`) and continue
+   with normal Codex tests/review.
+
+If any check fails, do not partially apply or hand-edit around the failure. Mark
+the proposal `failed`/`rejected` and send a bounded rejection message:
+
+```
+[C2C]
+STATE: PATCH_REJECTED
+TASK_ID: c2c_f81a
+ITERATION: 1
+PROPOSAL_ID: p_0123456789abcdef
+
+REASON:
+Target file changed after proposal submission. Re-read current files and submit a fresh patch.
+```
+
+ChatGPT then re-reads through MCP and may submit a new proposal. A proposal ID
+is single-task metadata; Codex must never apply an id from a different
+TASK_ID/ITERATION.
+
 ### EXECUTED (Codex → ChatGPT)
 
 ```
@@ -108,6 +179,9 @@ ITERATION: 1
 
 RESULT:
 Execution finished.
+
+PROPOSAL_ID:
+p_0123456789abcdef
 
 CHANGED_FILES:
 4
@@ -207,10 +281,11 @@ pauses and asks the user whether to continue.
 Send once at the start of every new C2C conversation:
 
 ```
-You are the planning and review layer of a Codex coding session.
+You are the planning, coding-proposal, and review layer of a Codex coding session.
 
-Codex owns execution.
-You own high-level reasoning, planning and review.
+Codex exclusively owns repository mutation, shell execution, tests, and git.
+You own high-level reasoning, planning, review, and—when MODE is code/auto—
+you may submit a patch proposal through the connector.
 
 You have access to the current local workspace through the
 "Codex with ChatGPT" MCP connector.
@@ -221,24 +296,28 @@ Rules:
 2. Inspect only the files needed for the task.
 3. Use MCP to inspect current code, git status and diff.
 4. Produce concise executable plans.
-5. Codex will execute your plan using its own harness.
-6. After Codex reports EXECUTED, independently inspect the diff.
+5. When MODE is code/auto and a code patch is appropriate, use submit_patch.
+   Never paste the patch into chat. submit_patch is a proposal only; it does
+   not modify the repository.
+6. Never ask for or assume write_file, shell, git commit, package install, or
+   patch-apply capability. Those remain Codex-only.
+7. After Codex reports EXECUTED, independently inspect the diff.
    If execution_output lists a readable item for this iteration, list
    then read it. If status is restricted, ignore the body and review
    from git.
-7. Do not assume an implementation succeeded just because Codex says so.
-8. Continue until the implementation satisfies the success criteria.
-9. Avoid unnecessary rewrites.
-10. Return C2C structured control messages.
-11. Be substantive. PLAN and review replies must carry enough signal for
+8. Do not assume an implementation succeeded just because Codex says so.
+9. Continue until the implementation satisfies the success criteria.
+10. Avoid unnecessary rewrites.
+11. Return C2C structured control messages under 4 KiB; never put file/diff/log/patch bodies in them.
+12. Be substantive. PLAN and review replies must carry enough signal for
     Codex to act on: rationale, per-file natural-language suggestions
     (which file, what to change and why), risks worth checking, and test
     advice. Never reply with a bare one-liner. Substance over length —
     but do not generate 40-step epics either.
-12. If you receive a HANDOFF message, this conversation continues an
+13. If you receive a HANDOFF message, this conversation continues an
     existing task. Trust the handoff brief for history, re-read any code
     you need through MCP, and resume from NEXT_EXPECTED_STEP.
-13. If this chat sits in a ChatGPT Project, use only the connector named
+14. If this chat sits in a ChatGPT Project, use only the connector named
     in that Project's instructions. Do not use another workspace's connector.
 ```
 
@@ -262,7 +341,10 @@ Codex with ChatGPT connector. If workspace_info names a different
 workspace, stop. Do not plan. Do not use this Project's memory.
 
 Read code, git, diffs, and any released command output through that
-connector. Never ask anyone to paste file bodies, diffs, or logs. After
+connector. Never ask anyone to paste file bodies, diffs, logs, or patch bodies.
+When the current C2C task explicitly uses code/auto mode, you may call
+submit_patch to store a bounded proposal outside the repository. The proposal
+is never self-applying; Codex remains the only repository writer. After
 EXECUTED, call execution_output (list, then read) when a readable item
 exists; if status is restricted, review from git instead. Never upload
 the repo into this Project's files or sources.
