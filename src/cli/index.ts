@@ -553,14 +553,14 @@ program
 
     if (runtime) {
       let info = await adminFetch<AdminInfo>(runtime, "GET", "/admin/info");
-      capabilities = { proposalWriteAuthorized: info.proposalWriteAuthorized };
+      capabilities = { proposalWriteAuthorized: Boolean(info.proposalWriteAuthorized) };
       if (namedReady && opts.fix && info.tunnel.provider !== "cloudflare-named") {
         await stopBridge(root);
         await new Promise((resolve) => setTimeout(resolve, 400));
         try {
           runtime = (await ensureBridge(root)).runtime;
           info = await adminFetch<AdminInfo>(runtime, "GET", "/admin/info");
-          capabilities = { proposalWriteAuthorized: info.proposalWriteAuthorized };
+          capabilities = { proposalWriteAuthorized: Boolean(info.proposalWriteAuthorized) };
           results.push("已切换到固定域名连接");
         } catch (error) {
           report.tunnel = { ok: false, detail: (error as Error).message };
@@ -590,7 +590,7 @@ program
               currentUrl = started.url;
               healthy = true;
               info = await adminFetch<AdminInfo>(runtime, "GET", "/admin/info");
-              capabilities = { proposalWriteAuthorized: info.proposalWriteAuthorized };
+              capabilities = { proposalWriteAuthorized: Boolean(info.proposalWriteAuthorized) };
               const sameAddress =
                 previousUrl && normalizePublicUrl(previousUrl) === normalizePublicUrl(started.url);
               results.push(sameAddress ? "已重新建立安全连接" : "已重新建立安全连接（地址已更换）");
