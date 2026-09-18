@@ -145,6 +145,8 @@ describe("patch proposal store", () => {
       ".gitmodules",
       "private/note.ts",
       ".git/config",
+      ".GIT/config",
+      ".C2CIGNORE",
       "dist/generated.js",
       "node_modules/pkg/index.js",
     ]) {
@@ -160,6 +162,16 @@ describe("patch proposal store", () => {
 
   it("rejects traversal, rename, binary, permission, and control-character patches", () => {
     const { workspace } = setup();
+
+    for (const ambiguous of ["src/file name.ts", "src/file.ts:stream"]) {
+      expect(() =>
+        savePatchProposal(workspace, {
+          taskId: "c2c_test",
+          iteration: 1,
+          patch: modifyPatch(ambiguous),
+        })
+      ).toThrow(/unsafe|ambiguous/i);
+    }
 
     const traversal = modifyPatch("../outside.ts");
     expect(() =>
