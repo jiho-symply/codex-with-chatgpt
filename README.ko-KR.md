@@ -103,8 +103,10 @@ proposal 채널은 다음을 차단합니다.
 
 파일 삭제는 차단하지 않지만 **항상 사용자 명시 승인이 필요한 proposal**로 분류합니다.
 
-patch 제출은 별도의 OAuth 권한 `proposal.write`를 사용합니다. 이 권한은
-**repository write/Shell/Git 권한을 주지 않습니다.**
+patch 제출은 별도의 OAuth 권한 `proposal.write`와 함께, **현재 coding
+TASK_ID에 대한 임시 로컬 승인**까지 둘 다 있어야 가능합니다. OAuth 권한만으로는
+patch를 제출할 수 없습니다. 로컬 승인은 기본 4시간 후 만료되고 작업이 DONE/BLOCKED
+상태가 되면 회수됩니다. 어느 쪽도 repository write/Shell/Git 권한을 주지 않습니다.
 
 C2C 제어 메시지 제한은 **4 KiB UTF-8**로 늘렸습니다. 이 공간은 plan/rationale/
 handoff를 더 충실하게 전달하기 위한 것이며, 코드·diff·로그·patch 본문을 Chat에
