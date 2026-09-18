@@ -6,6 +6,11 @@ import { searchWorkspace } from "../workspace/search.js";
 import { gitDiff, gitInfo, gitStatus, type DiffMode } from "../workspace/git.js";
 import { executionRecordSchema, latestExecutionRecord, readExecutionRecords } from "../execution/records.js";
 import { listExecutionOutputs, readExecutionOutput } from "../execution/output.js";
+import {
+  MAX_PATCH_BYTES,
+  PatchProposalError,
+  savePatchProposal,
+} from "../proposal/store.js";
 import type { Logger } from "../logger/index.js";
 import { PRODUCT_NAME, VERSION } from "../version.js";
 
@@ -36,6 +41,7 @@ function fail(code: string, message: string): ToolResult {
 
 function mapError(error: unknown): ToolResult {
   if (error instanceof WorkspaceError) return fail(error.code, error.message);
+  if (error instanceof PatchProposalError) return fail(error.code, error.message);
   return fail("INTERNAL_ERROR", error instanceof Error ? error.message : String(error));
 }
 
@@ -177,6 +183,17 @@ const executionOutputOutputSchema = {
   timestamp: z.string().optional(),
   truncated: z.boolean().optional(),
   text: z.string().optional().describe("Sanitized command output returned by the read operation"),
+};
+
+const submitPatchOutputSchema = {
+  proposalId: z.string(),
+  taskId: z.string(),
+  iteration: z.number().int().nonnegative(),
+  status: z.literal("pending"),
+  sizeBytes: z.number().int().positive(),
+  sha256: z.string(),
+  fileCount: z.number().int().positive(),
+  paths: z.array(z.string()),
 };
 
 export interface McpContext {
@@ -468,6 +485,53 @@ export function createMcpServer(ctx: McpContext): McpServer {
         truncated: result.meta.truncated,
         text: result.text,
       });
+    }
+  );
+
+
+  server.registerTool(
+    "submit_patch",
+    {
+      title: "Submit patch proposal",
+      description:
+        `Submit a bounded text-only unified diff as an isolated proposal for Codex to validate and apply. ` +
+        `This tool NEVER writes to the repository, runs shell commands, changes git state, or applies the patch. ` +
+        `The proposal is stored outside the workspace with owner-only permissions. Sensitive/C2C control paths, ` +
+        `symlink targets, binary patches, renames, permission changes and submodule patches are rejected. ` +
+        `Maximum patch size is ${MAX_PATCH_BYTES} UTF-8 bytes. Codex independently checks staleness and git-apply ` +
+        `validity before any repository change. ${UNTRUSTED_NOTE}`,
+      inputSchema: {
+        task_id: z.string().min(1).max(80).regex(/^[A-Za-z0-9._-]+$/),
+        iteration: z.number().int().min(0).max(1000),
+        patch: z.string().min(1).max(MAX_PATCH_BYTES),
+        summary: z.string().max(4096).optional(),
+      },
+      outputSchema: submitPatchOutputSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false },
+    },
+    async (args, extra) => {
+      const denied = requireScope(extra.authInfo, "proposal.write");
+      if (denied) return denied;
+      try {
+        const meta = savePatchProposal(workspace, {
+          taskId: args.task_id,
+          iteration: args.iteration,
+          patch: args.patch,
+          summary: args.summary,
+        });
+        return okStructured({
+          proposalId: meta.id,
+          taskId: meta.taskId,
+          iteration: meta.iteration,
+          status: "pending" as const,
+          sizeBytes: meta.sizeBytes,
+          sha256: meta.sha256,
+          fileCount: meta.fileCount,
+          paths: meta.paths,
+        });
+      } catch (error) {
+        return mapError(error);
+      }
     }
   );
 
