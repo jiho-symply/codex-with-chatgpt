@@ -168,6 +168,7 @@ export async function startBridge(opts: BridgeOptions): Promise<Bridge> {
       publicUrl: publicBaseUrl,
       tunnel: tunnel.status(),
       tokenCount: authStore.tokenCount(),
+      proposalWriteAuthorized: authStore.hasActiveScope("proposal.write"),
       pairingActive: pairing.hasActiveSession(),
       pid: process.pid,
       startedAt,
