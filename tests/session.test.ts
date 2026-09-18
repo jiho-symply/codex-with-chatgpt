@@ -119,6 +119,27 @@ describe("mergeSession", () => {
     expect(cleared.url).toBe("https://chatgpt.com/c/keep");
   });
 
+  it("persists a received patch proposal for crash-safe resume", () => {
+    const next = mergeSession(
+      {
+        url: "https://chatgpt.com/c/keep",
+        taskId: "c2c_patch1",
+        iteration: 2,
+        savedAt: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        checkpoint: {
+          protocolState: "PATCH_RECEIVED",
+          waitingFor: "none",
+          proposalId: "p_0123456789abcdef",
+          nextExpectedStep: "inspect and validate patch proposal",
+        },
+      }
+    );
+    expect(next.checkpoint?.protocolState).toBe("PATCH_RECEIVED");
+    expect(next.checkpoint?.proposalId).toBe("p_0123456789abcdef");
+  });
+
   it("keeps an existing checkpoint when only the chat URL is updated", () => {
     const previous = mergeSession(
       {
