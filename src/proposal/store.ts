@@ -189,13 +189,13 @@ function validateSection(section: string[], target: string): PatchFileOperation 
         line.startsWith("copy to ") ||
         line.startsWith("old mode ") ||
         line.startsWith("new mode ") ||
-        line.includes(" 160000") ||
+        /\b(?:100755|120000|160000)\b/.test(line) ||
         line.startsWith("Subproject commit ")
     )
   ) {
     throw new PatchProposalError(
       "INVALID_PATCH",
-      "Rename/copy, permission-only, and submodule patches are not accepted."
+      "Rename/copy, executable/symlink/permission-mode, and submodule patches are not accepted."
     );
   }
 
