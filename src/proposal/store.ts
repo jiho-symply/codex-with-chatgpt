@@ -576,6 +576,12 @@ export function markPatchProposal(
   const index = readIndex(workspaceId);
   const found = index.items.find((item) => item.id === id);
   if (!found) throw new PatchProposalError("PROPOSAL_NOT_FOUND", `No patch proposal with id ${id}.`);
+  if (found.status !== "pending" && found.status !== status) {
+    throw new PatchProposalError(
+      "INVALID_PATCH",
+      `Proposal ${id} is already terminal with status ${found.status}; refusing transition to ${status}.`
+    );
+  }
   found.status = status;
   found.updatedAt = new Date().toISOString();
   writeIndex(workspaceId, index);
