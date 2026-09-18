@@ -761,10 +761,12 @@ On PATCH:
    - integrity inspection succeeded;
    - `stale == false`.
    Never apply a proposal that fails any check.
-4. Review `meta.paths`, `meta.risk`, and `meta.riskReasons`.
+4. Review `meta.paths`, `meta.operations`, `meta.risk`, and
+   `meta.riskReasons`.
    - `normal`: continue.
-   - `execution-sensitive`: show the affected paths + risk reasons and obtain
-     **explicit user approval** before applying. If declined, mark rejected and
+   - `approval-required`: show affected paths, create/modify/delete operations,
+     and risk reasons and obtain **explicit user approval** before applying.
+     File deletion always requires approval. If declined, mark rejected and
      send PATCH_REJECTED.
 5. Read the proposal patch locally using Codex's own local file capability at
    `patchPath`. Inspect the actual changes against the user's goal. This local
@@ -806,7 +808,7 @@ the same task id/iteration and wait. Never apply the rejected id later.
 After Codex-authored PLAN changes or an accepted PATCH:
 
 1. Run appropriate tests/typecheck/lint/build using Codex's normal judgment.
-   For execution-sensitive proposals, user approval from step 3B is required
+   For approval-required proposals, user approval from step 3B is required
    before any new/changed execution configuration is used.
 2. Record metadata:
    `c2c record -w <ws> --task <id> --iteration <n> --changed-files "<files>" --tests "<summary>" --exit-status ok`.
