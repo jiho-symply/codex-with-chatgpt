@@ -34,34 +34,48 @@ official ChatGPT web UI plus a read-only MCP bridge.
 session. The repository is not uploaded to ChatGPT. ChatGPT pulls only the
 workspace data it needs through an OAuth-protected, read-only MCP connection.
 
-## Model selection · ChatGPT 모델 선택
+## Model & reasoning selection · 모델/추론 수준 선택
 
-This fork adds a machine-wide preferred ChatGPT model setting.
+The normal UX does **not** require you to know or type model names.
 
-이 포크에서는 **새 ChatGPT 대화를 만들 때 사용할 모델을 지정**할 수 있습니다.
+일반 사용자는 모델 이름을 외워서 입력할 필요가 없습니다. Codex에게 다음처럼
+요청합니다.
+
+```text
+Codex with ChatGPT 모델 설정해줘.
+```
+
+Codex opens the signed-in ChatGPT web model picker and reads the choices that
+are **actually available to that account**. The flow is:
+
+```text
+사용 가능한 모델 목록
+        ↓
+모델 선택
+        ↓
+선택한 모델에서 사용 가능한 reasoning/effort 목록
+        ↓
+effort 선택
+        ↓
+설정 저장
+```
+
+The available list is discovered from the live ChatGPT web UI rather than a
+hard-coded plan table. If the account exposes a flattened picker instead of
+separate model/effort controls, Codex presents the selectable entries that the
+UI actually exposes rather than inventing unavailable combinations.
+
+The stored preferences are applied to **new C2C chats**. If a previously saved
+model or effort is no longer available, C2C stops before sending the boot
+prompt and offers to reconfigure instead of silently falling back.
+
+Low-level storage commands remain available for automation/debugging:
 
 ```bash
-c2c prefs set --model "GPT-5.6 Sol"
 c2c prefs --json
+c2c prefs set --model "GPT-5.6 Sol" --effort "High"
+c2c prefs set --model default --effort default
 ```
-
-The value is the **visible model label in the ChatGPT web model picker**. On
-each newly created C2C conversation, Codex selects that exact model before the
-boot prompt.
-
-모델 이름은 ChatGPT 웹의 모델 선택기에 표시되는 이름과 정확히 일치해야 합니다.
-해당 계정에서 모델을 사용할 수 없으면 다른 모델로 자동 대체하지 않고 중단하여
-사용자에게 알립니다.
-
-To return to ChatGPT's normal/default model behavior:
-
-```bash
-c2c prefs set --model default
-```
-
-The preference is applied only when creating a **new** ChatGPT conversation.
-Existing C2C conversations keep their current model unless the user explicitly
-requests a change.
 
 ## One-paste install · 한 번에 설치
 
@@ -108,8 +122,8 @@ Please install and configure "Codex with ChatGPT" fully automatically.
 
 1. Copy `skill/` to `~/.codex/skills/codex-with-chatgpt/`.
 2. Tell Codex: **"Codex with ChatGPT 최초 설정해줘."**
-3. Optionally choose a model:
-   `c2c prefs set --model "<visible ChatGPT model label>"`
+3. 원하는 경우 Codex에게 **"Codex with ChatGPT 모델 설정해줘."**라고 요청해
+   계정에서 실제 사용 가능한 모델과 effort를 목록에서 선택합니다.
 4. Use it normally:
    **"Codex with ChatGPT를 사용해서 XXX를 구현해줘."**
 
@@ -175,8 +189,8 @@ pnpm test
 
 c2c setup
 c2c prefs --json
-c2c prefs set --model "GPT-5.6 Sol"
-c2c prefs set --model default
+c2c prefs set --model "GPT-5.6 Sol" --effort "High"
+c2c prefs set --model default --effort default
 c2c sandbox-allow
 c2c status
 c2c doctor
