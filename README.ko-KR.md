@@ -82,8 +82,8 @@ Codex는 적용 전에 다음 절차를 강제합니다.
 
 1. proposal의 task/iteration/id와 SHA-256 무결성 확인
 2. 제출 시점 대상 파일 fingerprint와 현재 파일을 비교해 stale 여부 확인
-3. dependency manifest, CI/CD, Docker/task 설정, Shell/PowerShell script 등
-   실행 민감 파일이면 사용자에게 명시적 승인 요청
+3. 의존성/빌드 설정, CI/CD, Docker/task 설정, Shell/PowerShell script,
+   파일 삭제처럼 승인이 필요한 변경이면 사용자에게 명시적 승인 요청
 4. Codex가 patch 내용을 로컬에서 직접 검토
 5. `git apply --check` 통과 확인
 6. Codex의 Shell로만 실제 적용
@@ -91,7 +91,8 @@ Codex는 적용 전에 다음 절차를 강제합니다.
 
 proposal 채널은 다음을 차단합니다.
 
-- `.env`, key/credential, `.c2cignore`, `.c2c.json`, `.git/*`
+- `.env`, key/credential, 생성물/cache/noise 경로, `.c2cignore`,
+  `.c2c.json`, `.gitattributes`, `.gitmodules`, `.git/*`
 - workspace 밖 경로, traversal, symlink 경유
 - binary patch
 - rename/copy 및 permission-only 변경
@@ -99,6 +100,8 @@ proposal 채널은 다음을 차단합니다.
 - 위험한 terminal control character
 - 256 KiB 초과 patch
 - 32개 초과 파일 변경
+
+파일 삭제는 차단하지 않지만 **항상 사용자 명시 승인이 필요한 proposal**로 분류합니다.
 
 patch 제출은 별도의 OAuth 권한 `proposal.write`를 사용합니다. 이 권한은
 **repository write/Shell/Git 권한을 주지 않습니다.**
