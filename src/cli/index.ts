@@ -56,6 +56,13 @@ import {
 } from "../session/state.js";
 import { appendExecutionRecord } from "../execution/records.js";
 import { saveExecutionOutput } from "../execution/output.js";
+import {
+  listPatchProposals,
+  markPatchProposal,
+  patchProposalBodyPath,
+  readPatchProposal,
+  type PatchProposalStatus,
+} from "../proposal/store.js";
 
 const program = new Command();
 
@@ -1145,6 +1152,99 @@ program
       else check("已记录执行摘要");
     }
   );
+
+
+const proposalCmd = program
+  .command("proposal")
+  .description("Inspect patch proposals submitted by ChatGPT; this command never applies them");
+
+proposalCmd
+  .command("list", { isDefault: true })
+  .description("List recent patch proposals for this workspace")
+  .option("-w, --workspace <path>")
+  .option("--limit <n>", "maximum proposals to show", parseNonNegativeInteger, 20)
+  .option("--json", "machine-readable output", false)
+  .action((opts: { workspace?: string; limit: number; json: boolean }) => {
+    try {
+      const workspace = new Workspace(resolveWorkspace(opts.workspace));
+      const items = listPatchProposals(workspace.id, Math.max(1, opts.limit));
+      if (opts.json) {
+        say(JSON.stringify({ ok: true, items }));
+        return;
+      }
+      if (items.length === 0) {
+        say("저장된 patch proposal이 없습니다.");
+        return;
+      }
+      for (const item of items) {
+        say(
+          `${item.id}  ${item.status}  task=${item.taskId} iter=${item.iteration}  ` +
+            `${item.fileCount} files / ${item.sizeBytes} bytes`
+        );
+      }
+    } catch (error) {
+      handleCliError(error, opts.json);
+    }
+  });
+
+proposalCmd
+  .command("inspect")
+  .description("Verify proposal integrity and detect whether target files changed since submission")
+  .argument("<id>", "proposal id")
+  .option("-w, --workspace <path>")
+  .option("--json", "machine-readable output", false)
+  .action((id: string, opts: { workspace?: string; json: boolean }) => {
+    try {
+      const workspace = new Workspace(resolveWorkspace(opts.workspace));
+      const result = readPatchProposal(workspace, id);
+      const patchPath = patchProposalBodyPath(workspace.id, id);
+      const payload = {
+        ok: true,
+        meta: result.meta,
+        stale: result.stale,
+        stalePaths: result.stalePaths,
+        patchPath,
+      };
+      if (opts.json) {
+        say(JSON.stringify(payload));
+        return;
+      }
+      say(`Proposal: ${result.meta.id}`);
+      say(`Status: ${result.meta.status}`);
+      say(`Files: ${result.meta.paths.join(", ")}`);
+      say(`Integrity: ok (${result.meta.sha256})`);
+      say(result.stale ? `Stale: yes (${result.stalePaths.join(", ")})` : "Stale: no");
+      say(`Patch file: ${patchPath}`);
+    } catch (error) {
+      handleCliError(error, opts.json);
+    }
+  });
+
+proposalCmd
+  .command("mark")
+  .description("Record the local disposition of a proposal; does not touch git or workspace files")
+  .argument("<id>", "proposal id")
+  .requiredOption("--status <status>", "applied | rejected | failed")
+  .option("-w, --workspace <path>")
+  .option("--json", "machine-readable output", false)
+  .action((id: string, opts: { workspace?: string; status: string; json: boolean }) => {
+    try {
+      const workspace = new Workspace(resolveWorkspace(opts.workspace));
+      const status = opts.status.trim().toLowerCase();
+      if (!["applied", "rejected", "failed"].includes(status)) {
+        throw new Error("status must be applied, rejected, or failed");
+      }
+      const meta = markPatchProposal(
+        workspace.id,
+        id,
+        status as Exclude<PatchProposalStatus, "pending">
+      );
+      if (opts.json) say(JSON.stringify({ ok: true, meta }));
+      else check(`Patch proposal ${id}: ${status}`);
+    } catch (error) {
+      handleCliError(error, opts.json);
+    }
+  });
 
 const tunnelCmd = program.command("tunnel").description("Choose or inspect the public connection for this workspace");
 
