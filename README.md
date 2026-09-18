@@ -15,24 +15,27 @@
 계획과 리뷰에도 소비될 수 있습니다. 이 프로젝트는 고수준 추론·계획·리뷰를
 ChatGPT 웹 앱에 맡기고, Codex는 코드 수정·Shell·테스트·Git 실행을 담당하도록
 분리합니다. API Key나 역방향 프록시를 사용하지 않고, 공식 ChatGPT 웹 UI와
-읽기 전용 MCP 브리지를 사용합니다.
+repository 읽기 전용 MCP 브리지와 격리된 patch-proposal 채널을 사용합니다.
 
 **EN** — ChatGPT Plus/Pro web quota may sit idle while your coding agent spends
 Codex/API capacity on planning and review. This project moves high-level
 reasoning, planning, and review to the ChatGPT web app while Codex keeps
 execution ownership. No API key or reverse proxy is required: it uses the
-official ChatGPT web UI plus a read-only MCP bridge.
+official ChatGPT web UI plus repository-read-only MCP access and an isolated patch-proposal channel.
 
 ## What it is · 무엇인가
 
-**한국어** — ChatGPT 웹 앱을 Codex 세션의 **계획·리뷰 계층**으로 사용합니다.
-저장소 전체를 ChatGPT에 업로드하지 않습니다. ChatGPT는 OAuth로 보호되는 읽기
-전용 MCP 연결을 통해 현재 workspace에서 필요한 파일, 검색 결과, diff, 테스트
-기록만 요청해서 읽습니다.
+**한국어** — ChatGPT 웹 앱을 Codex 세션의 **계획·코딩 proposal·리뷰 계층**으로
+사용합니다. 저장소 전체를 ChatGPT에 업로드하지 않습니다. ChatGPT는 OAuth로
+보호되는 MCP를 통해 필요한 파일/diff/테스트 기록을 읽고, 사용자가 coding-subagent
+동작을 요청한 경우에만 repository 밖의 격리 저장소에 patch proposal을 제출할 수
+있습니다. 실제 repository 수정/실행/Git은 Codex만 수행합니다.
 
-**EN** — ChatGPT becomes the planning and review layer for a Codex coding
-session. The repository is not uploaded to ChatGPT. ChatGPT pulls only the
-workspace data it needs through an OAuth-protected, read-only MCP connection.
+**EN** — ChatGPT becomes the planning, coding-proposal, and review layer for a
+Codex session. Repository access remains read-only to ChatGPT. When explicitly
+used as a coding subagent, ChatGPT may submit a bounded patch proposal into an
+isolated C2C state store; only Codex can validate/apply it, run commands, or
+change git state.
 
 ## Model & reasoning selection · 모델/추론 수준 선택
 
@@ -68,6 +71,39 @@ UI actually exposes rather than inventing unavailable combinations.
 The stored preferences are applied to **new C2C chats**. If a previously saved
 model or effort is no longer available, C2C stops before sending the boot
 prompt and offers to reconfigure instead of silently falling back.
+
+## Coding-subagent mode · 코드 patch 작성
+
+Classic C2C behavior is preserved by default: ChatGPT plans/reviews and Codex
+writes. When you explicitly want ChatGPT to write the implementation, say for
+example:
+
+```text
+Codex with ChatGPT를 coding subagent로 사용해서 이 기능 구현해줘.
+ChatGPT가 코드 patch까지 작성하게 해줘.
+```
+
+In this mode ChatGPT can call `submit_patch`. The patch is **not applied** by
+MCP. It is stored outside the repository with owner-only permissions. Codex then:
+
+1. verifies proposal id/task/iteration and SHA-256 integrity;
+2. rejects stale target files using submission-time fingerprints;
+3. requires explicit approval for execution-sensitive files such as dependency
+   manifests, CI/CD configuration, Docker/task config, or shell scripts;
+4. locally inspects the patch;
+5. runs `git apply --check`;
+6. only then applies it with Codex's own shell;
+7. tests the result and asks ChatGPT to independently review the real diff.
+
+The proposal channel rejects sensitive/C2C control paths, traversal/symlink
+targets, binary patches, rename/copy, permission-only changes, submodules,
+unsafe control characters, patches over 256 KiB, and proposals touching more
+than 32 files. Patch submission has a separate OAuth scope, `proposal.write`;
+it does **not** grant repository write, shell, or git permissions.
+
+Control-plane C2C messages may now be up to **4 KiB UTF-8**, but this extra
+space is only for rationale/state/handoff. Code, diffs, logs, and patch bodies
+must still travel through the data plane, never through chat control messages.
 
 Low-level storage commands remain available for automation/debugging:
 
@@ -136,7 +172,7 @@ conversation reuses its existing ChatGPT chat.
 ```text
              ┌───────────────────────────┐
              │       ChatGPT Web         │
-             │  Reason / Plan / Review   │
+             │ Reason / Plan / Patch / Review │
              └──────────┬──────────▲─────┘
                         │          │
                MCP      │          │ Browser control
@@ -144,7 +180,7 @@ conversation reuses its existing ChatGPT chat.
                         ▼          │
              ┌─────────────────────┐
              │      C2C Bridge     │
-             │    read-only MCP    │
+             │ repo RO + proposal MCP │
              │ OAuth + Pairing     │
              │  Tunnel Manager     │
              └──────────┬──────────┘
@@ -156,19 +192,18 @@ conversation reuses its existing ChatGPT chat.
                                               └─────────────────────┘
 ```
 
-- **Control plane**: Codex and ChatGPT exchange small structured `[C2C]`
-  messages: `INIT → PLAN → EXECUTED → REVIEW → DONE`.
-- **Data plane**: ChatGPT reads workspace data through nine read-only MCP tools:
-  `workspace_info`, `list_directory`, `read_file`, `search_workspace`,
-  `git_status`, `git_diff`, `test_status`, `execution_summary`, and
-  `execution_output`.
-- **Independent review**: ChatGPT can inspect the actual Git diff and test
-  records after Codex executes the plan.
+- **Control plane**: bounded (<4 KiB) structured `[C2C]` state/rationale
+  messages. No file/diff/log/patch body is transported here.
+- **Data plane**: nine read tools plus `submit_patch`. The latter stores only
+  an isolated proposal and cannot change repository files.
+- **Independent execution/review**: Codex validates/applies/tests; ChatGPT then
+  inspects the actual Git diff and test records independently.
 
 ## Security model
 
-- **Read-only by construction**: the bridge exposes no write, delete, shell, or
-  commit tool.
+- **Repository read-only by construction**: ChatGPT has no workspace write,
+  delete, shell, patch-apply, commit, or package-install tool. `submit_patch`
+  writes only to isolated C2C state under its own OAuth scope.
 - **Workspace isolation**: tokens and path containment are bound to one
   workspace.
 - **Sensitive-file policy**: `.env*`, keys, SSH credentials, and similar
@@ -210,7 +245,8 @@ Docs: [architecture](docs/architecture.md) · [protocol](docs/protocol.md) ·
 ```text
 src/
   bridge/     loopback HTTP server, port recovery, admin API
-  mcp/        9 read-only tools, stateless Streamable HTTP
+  mcp/        9 read tools + isolated submit_patch, stateless Streamable HTTP
+  proposal/   bounded patch validation, integrity/staleness/risk metadata
   auth/       OAuth 2.1, PKCE, registration, token rotation/revocation
   pairing/    one-time pairing codes
   workspace/  path containment, sensitive-file policy, search, git
