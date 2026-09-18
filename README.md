@@ -88,17 +88,18 @@ MCP. It is stored outside the repository with owner-only permissions. Codex then
 
 1. verifies proposal id/task/iteration and SHA-256 integrity;
 2. rejects stale target files using submission-time fingerprints;
-3. requires explicit approval for execution-sensitive files such as dependency
-   manifests, CI/CD configuration, Docker/task config, or shell scripts;
+3. requires explicit approval for approval-required changes such as dependency
+   manifests, CI/CD configuration, Docker/task config, shell scripts, or file deletion;
 4. locally inspects the patch;
 5. runs `git apply --check`;
 6. only then applies it with Codex's own shell;
 7. tests the result and asks ChatGPT to independently review the real diff.
 
-The proposal channel rejects sensitive/C2C control paths, traversal/symlink
-targets, binary patches, rename/copy, permission-only changes, submodules,
-unsafe control characters, patches over 256 KiB, and proposals touching more
-than 32 files. Patch submission has a separate OAuth scope, `proposal.write`;
+The proposal channel rejects sensitive/generated/C2C/Git-control paths,
+traversal/symlink targets, binary patches, rename/copy, permission-only changes,
+submodules, unsafe control characters, patches over 256 KiB, and proposals
+touching more than 32 files. File deletion is permitted only as an
+approval-required operation. Patch submission has a separate OAuth scope, `proposal.write`;
 it does **not** grant repository write, shell, or git permissions.
 
 Control-plane C2C messages may now be up to **4 KiB UTF-8**, but this extra
