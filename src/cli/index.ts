@@ -921,7 +921,8 @@ session
   .option("--project-url <url>", "ChatGPT Project collection URL (…/g/g-p-…/project)")
   .option("--connector-name <name>", "exact connector title for this workspace")
   .option("--protocol-state <state>", "checkpoint protocol state, e.g. EXECUTED_SENT")
-  .option("--waiting-for <who>", "none | GPT_PLAN | GPT_REVIEW | USER")
+  .option("--waiting-for <who>", "none | GPT_PLAN | GPT_ACTION | GPT_REVIEW | USER")
+  .option("--proposal-id <id>", "active patch proposal id for crash-safe resume")
   .option("--goal <text>", "original task goal for resume / HANDOFF")
   .option("--completed-subtasks <text>")
   .option("--known-issues <text>")
@@ -940,6 +941,7 @@ session
       connectorName?: string;
       protocolState?: string;
       waitingFor?: string;
+      proposalId?: string;
       goal?: string;
       completedSubtasks?: string;
       knownIssues?: string;
@@ -978,6 +980,7 @@ session
           ? {
               protocolState: protocolRaw as ProtocolState,
               waitingFor: (waitingNorm as WaitingFor | undefined) ?? undefined,
+              proposalId: opts.proposalId,
               originalGoal: opts.goal,
               completedSubtasks: opts.completedSubtasks,
               knownIssues: opts.knownIssues,
