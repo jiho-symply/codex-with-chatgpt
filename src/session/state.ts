@@ -17,6 +17,7 @@ export type ProtocolState =
   | "BLOCKED";
 
 export type WaitingFor = "none" | "GPT_PLAN" | "GPT_ACTION" | "GPT_REVIEW" | "USER";
+export type TaskMode = "plan" | "code" | "auto" | "review";
 
 export const PROTOCOL_STATES: readonly ProtocolState[] = [
   "INIT",
@@ -36,6 +37,7 @@ export interface TaskCheckpoint {
   iteration: number;
   protocolState: ProtocolState;
   waitingFor: WaitingFor;
+  taskMode?: TaskMode;
   originalGoal?: string;
   completedSubtasks?: string;
   knownIssues?: string;
@@ -231,6 +233,7 @@ export function mergeSession(previous: SavedSession | null, patch: SessionPatch)
       iteration,
       protocolState,
       waitingFor,
+      taskMode: patch.checkpoint.taskMode ?? previous?.checkpoint?.taskMode,
       originalGoal: capCheckpointText(
         patch.checkpoint.originalGoal ?? previous?.checkpoint?.originalGoal,
         CHECKPOINT_LIMITS.originalGoal
