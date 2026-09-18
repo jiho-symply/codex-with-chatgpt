@@ -194,7 +194,11 @@ const submitPatchOutputSchema = {
   sha256: z.string(),
   fileCount: z.number().int().positive(),
   paths: z.array(z.string()),
-  risk: z.enum(["normal", "execution-sensitive"]),
+  operations: z.array(z.object({
+    path: z.string(),
+    operation: z.enum(["create", "modify", "delete"]),
+  })),
+  risk: z.enum(["normal", "approval-required"]),
   riskReasons: z.array(z.string()),
 };
 
@@ -530,6 +534,7 @@ export function createMcpServer(ctx: McpContext): McpServer {
           sha256: meta.sha256,
           fileCount: meta.fileCount,
           paths: meta.paths,
+          operations: meta.operations,
           risk: meta.risk,
           riskReasons: meta.riskReasons,
         });
