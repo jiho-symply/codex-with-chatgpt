@@ -1020,6 +1020,7 @@ acceptUnusedWorkspaceOption(
     else if (prefs.setupMode === "manual") say("설정 방식: 수동 안내 설정");
     else say("설정 방식: 아직 선택하지 않음");
     say(prefs.chatgptModel ? `ChatGPT 모델: ${prefs.chatgptModel}` : "ChatGPT 모델: 기본값 사용");
+    say(prefs.chatgptEffort ? `추론 effort: ${prefs.chatgptEffort}` : "추론 effort: 기본값 사용");
   });
 
 acceptUnusedWorkspaceOption(
@@ -1029,24 +1030,35 @@ acceptUnusedWorkspaceOption(
     .option("--developer-mode", "remember that ChatGPT developer mode is on", false)
     .option("--setup-mode <mode>", "auto (preview) or manual")
     .option("--model <label>", "preferred ChatGPT model label; use 'default' to clear")
+    .option("--effort <label>", "preferred reasoning/effort label; use 'default' to clear")
     .option("--json", "machine-readable output", false)
 )
-  .action((opts: { developerMode: boolean; setupMode?: string; model?: string; json: boolean }) => {
+  .action((opts: { developerMode: boolean; setupMode?: string; model?: string; effort?: string; json: boolean }) => {
     try {
       const modeRaw = opts.setupMode?.trim().toLowerCase();
       if (modeRaw && !SETUP_MODES.includes(modeRaw as SetupMode)) {
         throw new Error(`setup-mode must be one of ${SETUP_MODES.join(", ")}`);
       }
       const modelRaw = opts.model?.trim();
-      if (!opts.developerMode && !modeRaw && modelRaw === undefined) {
-        throw new Error("nothing to save: pass --developer-mode, --setup-mode, and/or --model");
+      const effortRaw = opts.effort?.trim();
+      if (!opts.developerMode && !modeRaw && modelRaw === undefined && effortRaw === undefined) {
+        throw new Error("nothing to save: pass --developer-mode, --setup-mode, --model, and/or --effort");
       }
       const chatgptModel =
         modelRaw === undefined ? undefined : modelRaw.toLowerCase() === "default" ? null : modelRaw;
+      let chatgptEffort =
+        effortRaw === undefined ? undefined : effortRaw.toLowerCase() === "default" ? null : effortRaw;
+      // Changing/clearing the model without an explicit effort invalidates the
+      // previously saved effort because availability is model-dependent.
+      if (modelRaw !== undefined && effortRaw === undefined) chatgptEffort = null;
+      if (chatgptModel === null && chatgptEffort && chatgptEffort !== null) {
+        throw new Error("cannot save a non-default effort while the model preference is default");
+      }
       const prefs = mergeUiPrefs({
         developerModeEnabled: opts.developerMode ? true : undefined,
         setupMode: modeRaw as SetupMode | undefined,
         chatgptModel,
+        chatgptEffort,
       });
       if (opts.json) {
         say(JSON.stringify({ ok: true, ...prefs }));
@@ -1058,6 +1070,12 @@ acceptUnusedWorkspaceOption(
       if (modelRaw !== undefined) {
         if (chatgptModel) check(`ChatGPT 모델 저장: ${chatgptModel}`);
         else check("ChatGPT 모델 설정을 지웠습니다. 기본 모델을 사용합니다");
+      }
+      if (effortRaw !== undefined) {
+        if (chatgptEffort) check(`추론 effort 저장: ${chatgptEffort}`);
+        else check("추론 effort 설정을 지웠습니다. 기본값을 사용합니다");
+      } else if (modelRaw !== undefined) {
+        check("모델이 변경되어 기존 effort 설정을 초기화했습니다");
       }
     } catch (error) {
       handleCliError(error, opts.json);
