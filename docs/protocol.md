@@ -39,7 +39,7 @@ Local checkpoint values (session only):
 
 | Checkpoint | Meaning |
 | --- | --- |
-| `INIT` | INIT sent; waiting for PLAN |
+| `INIT` | INIT sent; waiting for PLAN or another allowed action such as PATCH |
 | `PLAN_RECEIVED` | PLAN in hand; not finished executing |
 | `PATCH_RECEIVED` | PATCH id checkpointed; proposal not yet applied |
 | `EXECUTING` | Codex is applying the current PLAN or accepted PATCH |
@@ -142,8 +142,8 @@ On receiving PATCH, Codex MUST:
 2. run `c2c proposal inspect -w <workspace> <id> --json`;
 3. require matching task id/iteration, `status=pending`, intact SHA-256, and
    `stale=false`;
-4. if `risk=execution-sensitive`, show the affected paths/reasons and obtain
-   explicit user approval before applying;
+4. if `risk=approval-required`, show the affected paths/operations/reasons and
+   obtain explicit user approval before applying (including any file deletion);
 5. run `git apply --check "<patchPath>"` without `--unsafe-paths`;
 6. inspect the proposed diff locally before any test/build command;
 7. only then run `git apply "<patchPath>"`; never use an auto-apply tool exposed
@@ -329,7 +329,8 @@ Never put a public or temporary URL in the instructions — only the
 connector **name**.
 
 ```
-You are the planning and review layer for one local workspace. Codex executes.
+You are the planning, coding-proposal, and review layer for one local workspace.
+Codex exclusively executes commands and mutates the repository.
 
 This Project is bound only to:
 - Workspace name: {{workspace_name}}
